@@ -814,12 +814,112 @@ html_content = """
             border-bottom: 1px solid var(--border-color);
         }
         
+        /* Сезонность */
+        .seasonality-container {
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+        .seasonality-card {
+            background: rgba(0,0,0,0.3);
+            border-radius: 20px;
+            padding: 1rem;
+        }
+        .seasonality-card h4 {
+            margin-bottom: 1rem;
+            font-size: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .bar-chart-modern {
+            display: flex;
+            justify-content: space-around;
+            align-items: flex-end;
+            gap: 0.5rem;
+            overflow-x: auto;
+            padding: 0.5rem 0;
+        }
+        .bar-item {
+            text-align: center;
+            min-width: 60px;
+        }
+        .bar-label {
+            font-size: 0.7rem;
+            margin-bottom: 0.3rem;
+        }
+        .bar-wrapper {
+            height: 120px;
+            display: flex;
+            align-items: flex-end;
+            justify-content: center;
+            margin-bottom: 0.3rem;
+        }
+        .bar-fill {
+            width: 30px;
+            border-radius: 12px 12px 0 0;
+            transition: height 0.6s ease-out;
+        }
+        .bar-value {
+            font-size: 0.7rem;
+            font-weight: bold;
+        }
+        
+        /* Себестоимость */
+        .cost-result-card {
+            background: rgba(16,185,129,0.1);
+            border-radius: 20px;
+            padding: 1rem;
+            margin-top: 1rem;
+        }
+        .cost-result-header {
+            font-size: 1rem;
+            font-weight: bold;
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            color: #f97316;
+        }
+        .cost-result-grid {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1rem;
+            justify-content: space-between;
+        }
+        .cost-result-item {
+            flex: 1;
+            min-width: 150px;
+            background: rgba(0,0,0,0.3);
+            border-radius: 16px;
+            padding: 0.8rem;
+            text-align: center;
+        }
+        .cost-result-icon {
+            font-size: 1.5rem;
+            color: #f97316;
+            margin-bottom: 0.3rem;
+        }
+        .cost-result-label {
+            font-size: 0.7rem;
+            opacity: 0.7;
+        }
+        .cost-result-value {
+            font-size: 1.1rem;
+            font-weight: bold;
+            margin-top: 0.3rem;
+            color: #f97316;
+        }
+        
         @media (max-width: 768px) {
             body { padding: 0.8rem; }
             .desktop-title { display: none; }
             .mobile-header { display: flex; }
             .result-stats { flex-direction: column; }
             .suggestion-buttons { flex-direction: column; }
+            .bar-item { min-width: 45px; }
+            .bar-fill { width: 25px; }
+            .cost-result-grid { flex-direction: column; }
         }
     </style>
 </head>
@@ -857,8 +957,8 @@ html_content = """
         <div id="categoriesBlock" class="card" style="display:none;"><div id="categoriesContent"></div><canvas id="expenseChart" style="max-width:300px; margin:1rem auto;"></canvas></div>
         <div id="trendBlock" class="card" style="display:none;"><canvas id="trendChart"></canvas></div>
         <div id="seasonalityBlock" class="card" style="display:none;"><div id="seasonalityContent"></div></div>
-        <div id="costBlock" class="card" style="display:none;"><h3>Расчёт себестоимости</h3><div class="cost-input-grid"><input type="text" id="productName" placeholder="Название"><input type="number" id="materialCost" placeholder="Сырьё"><input type="number" id="timeMinutes" placeholder="Время (мин)"><input type="number" id="quantityMonth" placeholder="Кол-во в месяц"><button class="btn" onclick="calculateCost()">Рассчитать</button></div><div id="costResult"></div></div>
-        <div id="chatBlock" class="card" style="display:none;"><h3>Чат с ИИ</h3><div class="chat-messages" id="chatMessages"><div>Задайте вопрос</div></div><div class="chat-input"><input type="text" id="questionInput" placeholder="Вопрос..."><button class="btn" onclick="askQuestion()">Отправить</button></div></div>
+        <div id="costBlock" class="card" style="display:none;"><h3>Расчёт себестоимости</h3><div class="cost-input-grid"><input type="text" id="productName" placeholder="Название товара"><input type="number" id="materialCost" placeholder="Сырьё на 1 ед. (руб)"><input type="number" id="timeMinutes" placeholder="Время на 1 ед. (мин)"><input type="number" id="quantityMonth" placeholder="Кол-во в месяц"><button class="btn" onclick="calculateCost()">Рассчитать</button></div><div id="costResult"></div></div>
+        <div id="chatBlock" class="card" style="display:none;"><h3>Чат с ИИ</h3><div class="chat-messages" id="chatMessages"><div>Задайте вопрос о финансах</div></div><div class="chat-input"><input type="text" id="questionInput" placeholder="Например: на чём мне сэкономить?"><button class="btn" onclick="askQuestion()">Отправить</button></div></div>
     </div>
 </div>
 <script>
@@ -871,6 +971,21 @@ function showConfetti() {
 
 function showSkeleton(show) {
     document.getElementById('skeletonLoader').style.display = show ? 'block' : 'none';
+}
+
+function animateValue(elementId, start, end, duration, suffix) {
+    const element = document.getElementById(elementId);
+    if(!element) return;
+    const range = end - start;
+    const startTime = performance.now();
+    function update(currentTime) {
+        const elapsed = currentTime - startTime;
+        const progress = Math.min(elapsed / duration, 1);
+        const value = start + (range * progress);
+        element.textContent = Math.round(value) + suffix;
+        if(progress < 1) requestAnimationFrame(update);
+    }
+    requestAnimationFrame(update);
 }
 
 const fileInput = document.getElementById('fileInput'), analyzeBtn = document.getElementById('analyzeBtn'), fileNameDiv = document.getElementById('fileName');
@@ -1006,10 +1121,10 @@ function showTips() {
 function showCategories() {
     const d = analysisData;
     if(d.categories && Object.keys(d.categories).length){
-        let table = '<h3><i class="fas fa-tags"></i> Расходы по категориям</h3>20table<th>Категория</th><th>Сумма (RUB)</th></tr>';
+        let table = '<h3><i class="fas fa-tags"></i> Расходы по категориям</h3>20table<th>Категория</th><th>Сумма (RUB)</th><tr>';
         for(const [cat,amt] of Object.entries(d.categories)){
             const icon = {'Аренда':'🏠','Сырьё и товары':'📦','Реклама':'📢','Налоги':'📄','Транспорт':'🚗','Продукты':'🍎','Кафе и рестораны':'🍽️','Образование':'📚','Прочее':'📌'}[cat] || '💰';
-            table += `<tr><td><span class="category-icon">${icon}</span> ${cat}</td><td>${amt.toFixed(2)} ₽</span></td></tr>`;
+            table += `<tr><td><span class="category-icon">${icon}</span> ${cat}</td><td>${amt.toFixed(2)} ₽</td></tr>`;
         }
         table += '</table>';
         document.getElementById('categoriesContent').innerHTML = table;
@@ -1025,28 +1140,56 @@ function showTrend() {
 
 function showSeasonality() {
     const s = analysisData.seasonality || {};
-    if(!s.has_data) document.getElementById('seasonalityContent').innerHTML = '<p><i class="fas fa-ban"></i> Нет данных о датах для анализа сезонности</p>';
-    else {
-        let html = '<h3><i class="fas fa-chart-gantt"></i> Анализ сезонности</h3>';
-        if(s.expense_by_month){
-            const months = ['Янв','Фев','Мар','Апр','Май','Июн','Июл','Авг','Сен','Окт','Ноя','Дек'];
-            const vals = months.map((_,i)=>s.expense_by_month[i+1]||0);
-            const maxVal = Math.max(...vals,1);
-            html += '<h4>Расходы по месяцам</h4><div class="bar-chart">';
-            vals.forEach((v,i)=>html+=`<div class="bar"><div class="bar-column" style="height:${(v/maxVal)*80}px"></div><div>${months[i]}</div><div style="font-size:0.6rem;">${v.toFixed(0)}</div></div>`);
-            html+='</div>';
-        }
-        if(s.by_weekday){
-            const days = ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
-            const vals = days.map(d=>s.by_weekday[d]||0);
-            const maxVal = Math.max(...vals,1);
-            html += '<h4>Расходы по дням недели</h4><div class="bar-chart">';
-            vals.forEach((v,i)=>html+=`<div class="bar"><div class="bar-column" style="height:${(v/maxVal)*80}px;background:#f97316"></div><div>${days[i]}</div><div style="font-size:0.6rem;">${v.toFixed(0)}</div></div>`);
-            html+='</div>';
-        }
-        if(s.max_expense_month) html += `<div class="info"><i class="fas fa-chart-line"></i> Пик расходов: ${s.max_expense_month.name} — ${s.max_expense_month.amount.toFixed(2)} ₽</div>`;
-        document.getElementById('seasonalityContent').innerHTML = html;
+    if(!s.has_data) {
+        document.getElementById('seasonalityContent').innerHTML = '<div class="info"><i class="fas fa-chart-line"></i> Добавьте даты в выписку для анализа сезонности</div>';
+        showBlock('seasonalityBlock');
+        return;
     }
+    
+    let html = '<div class="seasonality-container">';
+    
+    // Расходы по месяцам
+    if(s.expense_by_month){
+        const months = ['Янв','Фев','Мар','Апр','Май','Июн','Июл','Авг','Сен','Окт','Ноя','Дек'];
+        const vals = months.map((_,i)=>s.expense_by_month[i+1]||0);
+        const maxVal = Math.max(...vals,1);
+        
+        html += '<div class="seasonality-card"><h4><i class="fas fa-calendar-alt"></i> Расходы по месяцам</h4><div class="bar-chart-modern">';
+        vals.forEach((v,i)=>{
+            const percent = (v / maxVal) * 100;
+            html += `<div class="bar-item">
+                        <div class="bar-label">${months[i]}</div>
+                        <div class="bar-wrapper">
+                            <div class="bar-fill" style="height: ${percent}%; width: 100%; background: linear-gradient(180deg, #f97316, #ea580c);"></div>
+                        </div>
+                        <div class="bar-value">${v.toFixed(0)} ₽</div>
+                    </div>`;
+        });
+        html += '</div></div>';
+    }
+    
+    // Расходы по дням недели
+    if(s.by_weekday){
+        const days = ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
+        const vals = days.map(d=>s.by_weekday[d]||0);
+        const maxVal = Math.max(...vals,1);
+        
+        html += '<div class="seasonality-card"><h4><i class="fas fa-calendar-week"></i> Расходы по дням недели</h4><div class="bar-chart-modern">';
+        vals.forEach((v,i)=>{
+            const percent = (v / maxVal) * 100;
+            html += `<div class="bar-item">
+                        <div class="bar-label">${days[i]}</div>
+                        <div class="bar-wrapper">
+                            <div class="bar-fill" style="height: ${percent}%; width: 100%; background: linear-gradient(180deg, #3b82f6, #1d4ed8);"></div>
+                        </div>
+                        <div class="bar-value">${v.toFixed(0)} ₽</div>
+                    </div>`;
+        });
+        html += '</div></div>';
+    }
+    
+    html += '</div>';
+    document.getElementById('seasonalityContent').innerHTML = html;
     showBlock('seasonalityBlock');
 }
 
@@ -1065,16 +1208,18 @@ async function askQuestion() {
     const q = document.getElementById('questionInput').value.trim();
     if(!q) return;
     const chatDiv = document.getElementById('chatMessages');
-    if(chatDiv.children.length===1 && chatDiv.children[0].textContent.includes('Задайте вопрос')) chatDiv.innerHTML='';
+    if(chatDiv.children.length===1 && chatDiv.children[0].textContent.includes('Задайте вопрос')) chatDiv.innerHTML = '';
     chatDiv.innerHTML += `<div class="chat-message-user"><span>${escapeHtml(q)}</span></div>`;
-    document.getElementById('questionInput').value='';
-    chatDiv.innerHTML += `<div class="typing">ИИ печатает...</div>`;
+    document.getElementById('questionInput').value = '';
+    chatDiv.innerHTML += `<div class="typing" style="opacity:0.7;font-style:italic;"><i class="fas fa-spinner fa-pulse"></i> ИИ печатает...</div>`;
+    chatDiv.scrollTop = chatDiv.scrollHeight;
     try{
         const res = await fetch('/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:q})});
         const data = await res.json();
         document.querySelector('.typing')?.remove();
         chatDiv.innerHTML += `<div class="chat-message-bot"><span>${escapeHtml(data.answer)}</span></div>`;
-    } catch(e){ document.querySelector('.typing')?.remove(); chatDiv.innerHTML += `<div class="chat-message-bot"><span>Ошибка</span></div>`; }
+        chatDiv.scrollTop = chatDiv.scrollHeight;
+    } catch(e){ document.querySelector('.typing')?.remove(); chatDiv.innerHTML += `<div class="chat-message-bot"><span><i class="fas fa-exclamation-triangle"></i> Ошибка</span></div>`; }
 }
 
 function calculateCost() {
@@ -1082,14 +1227,44 @@ function calculateCost() {
     const mat = parseFloat(document.getElementById('materialCost').value);
     const time = parseInt(document.getElementById('timeMinutes').value);
     const qty = parseInt(document.getElementById('quantityMonth').value);
-    if(!name || isNaN(mat) || isNaN(time) || isNaN(qty)){ alert('Заполните поля'); return; }
+    if(!name || isNaN(mat) || isNaN(time) || isNaN(qty)){ alert('Заполните все поля'); return; }
     const totalExp = analysisData ? analysisData.expense : 0;
     const labor = (300/60)*time;
-    const cost = (mat*qty + labor*qty + totalExp)/qty;
+    const varTotal = mat*qty + labor*qty;
+    const full = varTotal + totalExp;
+    const cost = full/qty;
     const price = cost*1.5;
     const breakeven = Math.ceil(totalExp / (price - (mat + labor)));
-    document.getElementById('costResult').innerHTML = `<div style="background:rgba(234,88,12,0.2);backdrop-filter:blur(5px);padding:1rem;border-radius:16px;"><h4>Результаты: ${escapeHtml(name)}</h4><div>Себестоимость: ${cost.toFixed(2)} ₽</div><div>Рекомендуемая цена: ${price.toFixed(2)} ₽</div><div>Точка безубыточности: ${breakeven} шт./мес.</div></div>`;
-    document.getElementById('costResult').style.display = 'block';
+    
+    const resultDiv = document.getElementById('costResult');
+    resultDiv.style.display = 'block';
+    resultDiv.innerHTML = `
+        <div class="cost-result-card">
+            <div class="cost-result-header">
+                <i class="fas fa-chart-line"></i> Результаты: ${escapeHtml(name)}
+            </div>
+            <div class="cost-result-grid">
+                <div class="cost-result-item">
+                    <div class="cost-result-icon"><i class="fas fa-cubes"></i></div>
+                    <div class="cost-result-label">Себестоимость единицы</div>
+                    <div class="cost-result-value" id="costValue">0 ₽</div>
+                </div>
+                <div class="cost-result-item">
+                    <div class="cost-result-icon"><i class="fas fa-tag"></i></div>
+                    <div class="cost-result-label">Рекомендуемая цена</div>
+                    <div class="cost-result-value" id="priceValue">0 ₽</div>
+                </div>
+                <div class="cost-result-item">
+                    <div class="cost-result-icon"><i class="fas fa-chart-simple"></i></div>
+                    <div class="cost-result-label">Точка безубыточности</div>
+                    <div class="cost-result-value" id="breakevenValue">0 шт./мес</div>
+                </div>
+            </div>
+        </div>
+    `;
+    animateValue('costValue', 0, cost, 1000, ' ₽');
+    animateValue('priceValue', 0, price, 1000, ' ₽');
+    animateValue('breakevenValue', 0, breakeven, 1000, ' шт./мес');
 }
 
 function escapeHtml(t){ const d=document.createElement('div'); d.textContent=t; return d.innerHTML; }
