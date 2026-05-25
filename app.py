@@ -112,22 +112,22 @@ def analyze_trends(categories, total_income, total_expense, net_profit, days_cou
     
     if net_profit < 0:
         recommendations.append("savings")
-        insights.append(f"Расходы превышают доходы на {abs(net_profit):.2f} ₽")
+        insights.append(f"⚠️ Расходы превышают доходы на {abs(net_profit):.2f} ₽")
     elif net_profit < total_income * 0.1 and total_income > 0:
         recommendations.append("savings")
-        insights.append(f"Маржинальность ниже 10% ({net_profit/total_income*100:.1f}%)")
+        insights.append(f"📉 Маржинальность ниже 10% ({net_profit/total_income*100:.1f}%)")
     
     if 'Прочее' in categories and total_expense > 0:
         other_percent = (categories['Прочее'] / total_expense) * 100
         if other_percent > 15:
             recommendations.append("categories")
-            insights.append(f"Категория «Прочее» — {other_percent:.1f}% расходов")
+            insights.append(f"🔍 Категория «Прочее» — {other_percent:.1f}% расходов")
     
     if 'Транспорт' in categories and total_expense > 0:
         transport = categories['Транспорт']
         if transport > total_expense * 0.15:
             recommendations.append("forecast")
-            insights.append(f"Высокие транспортные расходы: {transport:.2f} ₽")
+            insights.append(f"🚗 Высокие транспортные расходы: {transport:.2f} ₽")
     
     recommendations.append("chat")
     recommendations.append("seasonality")
@@ -232,12 +232,9 @@ def analyze_seasonality(df, date_col):
     return result
 
 def parse_file(file_content: bytes, filename: str):
-    """Определяет формат файла и возвращает DataFrame"""
-    
     ext = filename.split('.')[-1].lower()
     df = None
     
-    # 1. CSV
     if ext == 'csv':
         encodings = ['cp1251', 'utf-8', 'windows-1251', 'latin1']
         for encoding in encodings:
@@ -250,46 +247,26 @@ def parse_file(file_content: bytes, filename: str):
             except:
                 continue
     
-    # 2. Excel
     elif ext in ['xlsx', 'xls', 'xlsm']:
         try:
             df = pd.read_excel(BytesIO(file_content), engine='openpyxl')
             print(f"✅ Прочитан Excel файл: {filename}")
-            print(f"📊 Найдено строк: {len(df)}")
-            print(f"📋 Колонки в Excel: {list(df.columns)}")
-            print(f"📋 Первые 5 строк:")
-            print(df.head())
-            
-            # Если колонок мало или они не те — пробуем прочитать с параметрами
-            if len(df.columns) < 2:
-                # Пробуем читать без заголовков
-                df = pd.read_excel(BytesIO(file_content), engine='openpyxl', header=None)
-                print(f"📋 Перечитано без заголовков, колонки: {list(df.columns)}")
-                print(df.head())
-                
+            print(f"📊 Найдено {len(df)} строк")
         except Exception as e:
             raise Exception(f"Ошибка чтения Excel: {e}")
     
-    # 3. PDF (через pdfplumber)
     elif ext == 'pdf':
         try:
             import pdfplumber
             
             all_tables = []
             pdf_file = io.BytesIO(file_content)
-            has_text = False
             
             with pdfplumber.open(pdf_file) as pdf:
                 print(f"📄 PDF страниц: {len(pdf.pages)}")
                 for page_num, page in enumerate(pdf.pages):
                     tables = page.extract_tables()
                     print(f"  Страница {page_num + 1}: найдено {len(tables)} таблиц")
-                    
-                    if not tables:
-                        text = page.extract_text()
-                        if text and len(text) > 100:
-                            has_text = True
-                    
                     for table in tables:
                         if table and len(table) > 1:
                             headers = [str(h).strip() if h else f"col_{i}" for i, h in enumerate(table[0])]
@@ -303,10 +280,7 @@ def parse_file(file_content: bytes, filename: str):
                 df = pd.concat(all_tables, ignore_index=True)
                 print(f"✅ Прочитан PDF: {len(df)} строк, {len(all_tables)} таблиц")
             else:
-                if has_text:
-                    raise Exception("В PDF найден текст, но нет таблиц. Попробуйте экспортировать выписку из банка в CSV или Excel.")
-                else:
-                    raise Exception("В PDF не найдено таблиц. Убедитесь, что файл содержит текстовые таблицы (не скан). Рекомендуем использовать CSV или Excel формат.")
+                raise Exception("В PDF не найдено таблиц")
                 
         except ImportError:
             raise Exception("Установите pdfplumber: pip install pdfplumber")
@@ -319,13 +293,9 @@ def parse_file(file_content: bytes, filename: str):
     if df is None or df.empty:
         raise Exception("Не удалось прочитать файл или файл пуст")
     
-    # Нормализуем названия колонок
     df.columns = df.columns.str.lower().str.strip()
-    
-    # Удаляем дубликаты колонок
     df = df.loc[:, ~df.columns.duplicated()]
     
-    # Переименовываем русские колонки в английские
     rename_map = {
         'дата и время': 'date',
         'дата': 'date',
@@ -345,26 +315,7 @@ def parse_file(file_content: bytes, filename: str):
             df.rename(columns={old_name: new_name}, inplace=True)
             print(f"🔄 Переименована: {old_name} → {new_name}")
     
-    # Добавляем колонку amount, если её нет (пытаемся найти похожие)
-    if 'amount' not in df.columns:
-        for col in df.columns:
-            if 'сум' in col or 'amount' in col or 'total' in col or 'sum' in col:
-                df.rename(columns={col: 'amount'}, inplace=True)
-                print(f"🔄 Переименована похожая колонка: {col} → amount")
-                break
-    
-    # Добавляем колонку type, если её нет
-    if 'type' not in df.columns:
-        for col in df.columns:
-            if 'тип' in col or 'type' in col or 'операц' in col:
-                df.rename(columns={col: 'type'}, inplace=True)
-                print(f"🔄 Переименована похожая колонка: {col} → type")
-                break
-    
-    # Ещё раз удаляем дубликаты после переименования
     df = df.loc[:, ~df.columns.duplicated()]
-    
-    print(f"📊 Финальные колонки: {list(df.columns)}")
     
     return df
 
@@ -603,8 +554,8 @@ async def ask_question(request: Request):
     except Exception as e:
         return JSONResponse({'answer': f'Ошибка: {str(e)}'})
 
-# HTML страница
-html_content = """<!DOCTYPE html>
+html_content = """
+<!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
@@ -627,7 +578,10 @@ html_content = """<!DOCTYPE html>
             --stat-bg: rgba(0, 0, 0, 0.5);
             --success: #f97316;
             --danger: #ef4444;
+            --warning: #f59e0b;
+            --info: #3b82f6;
             --card-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+            --hover-shadow: 0 12px 40px rgba(234, 88, 12, 0.2);
             --backdrop-blur: blur(10px);
         }
         
@@ -638,9 +592,37 @@ html_content = """<!DOCTYPE html>
             padding: 1.5rem;
         }
         
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(30px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.05); background: linear-gradient(135deg, #ea580c 0%, #f97316 100%); }
+            100% { transform: scale(1); }
+        }
+        
         @keyframes confettiFall {
             0% { transform: translateY(0) rotate(0deg); opacity: 1; }
             100% { transform: translateY(100vh) rotate(720deg); opacity: 0; }
+        }
+        
+        /* Кастомный скроллбар */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: var(--card-bg);
+            border-radius: 10px;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: var(--accent);
+            border-radius: 10px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--primary-start);
         }
         
         .container { max-width: 1200px; margin: 0 auto; position: relative; z-index: 1; }
@@ -652,9 +634,14 @@ html_content = """<!DOCTYPE html>
             padding: 1.5rem;
             margin-bottom: 1.5rem;
             box-shadow: var(--card-shadow);
-            transition: transform 0.3s ease;
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+            animation: fadeInUp 0.4s ease-out;
             color: var(--text-primary);
             border: 1px solid var(--border-color);
+        }
+        .card:hover {
+            transform: translateY(-4px);
+            box-shadow: var(--hover-shadow);
         }
         
         h1 {
@@ -672,9 +659,10 @@ html_content = """<!DOCTYPE html>
             padding: 2rem;
             text-align: center;
             cursor: pointer;
+            transition: all 0.3s ease;
             background: rgba(0, 0, 0, 0.3);
         }
-        .upload-area:hover { border-color: var(--accent); background: rgba(234, 88, 12, 0.1); }
+        .upload-area:hover { border-color: var(--accent); background: rgba(234, 88, 12, 0.1); transform: scale(1.01); }
         .upload-area i { font-size: 3rem; color: var(--accent); margin-bottom: 1rem; }
         
         input[type="file"] { display: none; }
@@ -688,8 +676,14 @@ html_content = """<!DOCTYPE html>
             font-size: 1rem;
             font-weight: 600;
             cursor: pointer;
+            transition: all 0.2s ease;
+            box-shadow: 0 4px 15px rgba(234, 88, 12, 0.3);
         }
-        .btn:hover { transform: scale(1.02); box-shadow: 0 4px 15px rgba(234, 88, 12, 0.4); }
+        .btn:hover { 
+            transform: translateY(-2px); 
+            box-shadow: 0 8px 25px rgba(234, 88, 12, 0.5);
+            background: linear-gradient(135deg, var(--primary-end), var(--primary-start));
+        }
         
         .suggestion-buttons {
             display: flex;
@@ -703,9 +697,15 @@ html_content = """<!DOCTYPE html>
             padding: 0.7rem 1.2rem;
             border-radius: 40px;
             cursor: pointer;
+            transition: all 0.2s;
             color: var(--text-primary);
+            font-size: 0.9rem;
         }
-        .suggestion-btn:hover { background: rgba(234, 88, 12, 0.3); }
+        .suggestion-btn:hover { 
+            background: rgba(234, 88, 12, 0.4); 
+            transform: translateY(-2px);
+            animation: pulse 0.4s ease;
+        }
         
         .result-stats {
             display: flex;
@@ -742,6 +742,22 @@ html_content = """<!DOCTYPE html>
             margin: 0 auto 1rem;
         }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        
+        .progress-container {
+            height: 8px;
+            background: var(--border-color);
+            border-radius: 4px;
+            margin-top: 1rem;
+            overflow: hidden;
+            display: none;
+        }
+        .progress-bar {
+            width: 0%;
+            height: 100%;
+            background: linear-gradient(90deg, var(--accent), var(--primary-start));
+            border-radius: 4px;
+            transition: width 0.3s ease;
+        }
         
         .chat-messages {
             height: 250px;
@@ -781,7 +797,7 @@ html_content = """<!DOCTYPE html>
             color: var(--text-primary);
         }
         
-        .mobile-header { display: none; justify-content: space-between; align-items: center; margin-bottom: 1rem; background: rgba(0,0,0,0.5); padding: 0.8rem 1.2rem; border-radius: 50px; }
+        .mobile-header { display: none; justify-content: space-between; align-items: center; margin-bottom: 1rem; background: rgba(0,0,0,0.5); backdrop-filter: blur(10px); padding: 0.8rem 1.2rem; border-radius: 50px; }
         #menuBtn { background: none; border: none; font-size: 1.6rem; cursor: pointer; color: var(--accent); }
         #mobileMenu {
             background: var(--card-bg);
@@ -826,11 +842,12 @@ html_content = """<!DOCTYPE html>
             <input type="file" id="fileInput" accept=".csv,.xlsx,.xls,.pdf">
         </div>
         <div id="fileName" class="info" style="display:none;"></div>
-        <div class="progress-container" id="progressContainer" style="display:none; height:4px; background:rgba(255,255,255,0.2); border-radius:2px; margin-top:1rem;"><div class="progress-bar" id="progressBar" style="width:0%; height:100%; background:var(--accent); transition:width 0.3s;"></div></div>
+        <div class="progress-container" id="progressContainer"><div class="progress-bar" id="progressBar"></div></div>
         <button class="btn" id="analyzeBtn" onclick="uploadFile()" style="width:100%;margin-top:1rem;" disabled><i class="fas fa-chart-line"></i> Анализировать</button>
     </div>
     
-    <div id="loading" style="display:none;text-align:center;padding:2rem;"><div class="spinner"></div><p>Анализирую выписку...</p></div>
+    <div id="skeletonLoader" style="display:none;"><div class="card"><div class="skeleton" style="height:200px;"></div></div></div>
+    <div class="loading" id="loading" style="display:none;text-align:center;padding:2rem;"><div class="spinner"></div><p>Анализирую выписку с помощью ИИ...</p></div>
     
     <div id="resultContainer" style="display:none;">
         <div class="card" id="suggestionCard"><h3><i class="fas fa-robot"></i> Анализ выполнен!</h3><div id="insightsContainer"></div><div id="suggestionButtons" class="suggestion-buttons"></div></div>
@@ -840,134 +857,226 @@ html_content = """<!DOCTYPE html>
         <div id="categoriesBlock" class="card" style="display:none;"><div id="categoriesContent"></div><canvas id="expenseChart" style="max-width:300px; margin:1rem auto;"></canvas></div>
         <div id="trendBlock" class="card" style="display:none;"><canvas id="trendChart"></canvas></div>
         <div id="seasonalityBlock" class="card" style="display:none;"><div id="seasonalityContent"></div></div>
-        <div id="costBlock" class="card" style="display:none;"><h3>Расчёт себестоимости</h3><div class="cost-input-grid" style="display:flex; flex-direction:column; gap:0.8rem;"><input type="text" id="productName" placeholder="Название"><input type="number" id="materialCost" placeholder="Сырьё"><input type="number" id="timeMinutes" placeholder="Время (мин)"><input type="number" id="quantityMonth" placeholder="Кол-во в месяц"><button class="btn" onclick="calculateCost()">Рассчитать</button></div><div id="costResult" style="margin-top:1rem;"></div></div>
+        <div id="costBlock" class="card" style="display:none;"><h3>Расчёт себестоимости</h3><div class="cost-input-grid"><input type="text" id="productName" placeholder="Название"><input type="number" id="materialCost" placeholder="Сырьё"><input type="number" id="timeMinutes" placeholder="Время (мин)"><input type="number" id="quantityMonth" placeholder="Кол-во в месяц"><button class="btn" onclick="calculateCost()">Рассчитать</button></div><div id="costResult"></div></div>
         <div id="chatBlock" class="card" style="display:none;"><h3>Чат с ИИ</h3><div class="chat-messages" id="chatMessages"><div>Задайте вопрос</div></div><div class="chat-input"><input type="text" id="questionInput" placeholder="Вопрос..."><button class="btn" onclick="askQuestion()">Отправить</button></div></div>
     </div>
 </div>
 <script>
 let selectedFile = null, analysisData = null, expenseChart = null, trendChart = null;
-const fileInput = document.getElementById('fileInput'), analyzeBtn = document.getElementById('analyzeBtn');
+
 function showConfetti() {
     const colors = ['#ea580c', '#f97316', '#c2410c'];
     for(let i=0;i<50;i++) setTimeout(()=>{ let c=document.createElement('div'); c.style.cssText=`position:fixed;top:-10px;left:${Math.random()*100}%;width:${Math.random()*8+4}px;height:${Math.random()*8+4}px;background:${colors[Math.floor(Math.random()*colors.length)]};border-radius:50%;pointer-events:none;z-index:9999;animation:confettiFall ${Math.random()*2+2}s linear forwards`; document.body.appendChild(c); setTimeout(()=>c.remove(),3000); }, i*30);
 }
-fileInput.onchange = () => { if(fileInput.files.length){ selectedFile = fileInput.files[0]; document.getElementById('fileName').textContent = `Выбран: ${selectedFile.name}`; document.getElementById('fileName').style.display='block'; analyzeBtn.disabled=false; } };
+
+function showSkeleton(show) {
+    document.getElementById('skeletonLoader').style.display = show ? 'block' : 'none';
+}
+
+const fileInput = document.getElementById('fileInput'), analyzeBtn = document.getElementById('analyzeBtn'), fileNameDiv = document.getElementById('fileName');
+const progressContainer = document.getElementById('progressContainer'), progressBar = document.getElementById('progressBar');
+
+function handleFileSelect() { if(fileInput.files.length){ selectedFile = fileInput.files[0]; fileNameDiv.textContent = `Выбран файл: ${selectedFile.name}`; fileNameDiv.style.display = 'block'; analyzeBtn.disabled = false; } }
+
+const dropZone = document.querySelector('.upload-area');
+dropZone.ondragover = (e) => { e.preventDefault(); dropZone.style.borderColor = '#f97316'; };
+dropZone.ondragleave = () => dropZone.style.borderColor = 'var(--border-color)';
+dropZone.ondrop = (e) => { e.preventDefault(); dropZone.style.borderColor = 'var(--border-color)'; if(e.dataTransfer.files.length){ fileInput.files = e.dataTransfer.files; handleFileSelect(); } };
+fileInput.onchange = () => handleFileSelect();
+
 async function uploadFile() {
     if(!selectedFile) return;
     const formData = new FormData(); formData.append('file', selectedFile);
-    document.getElementById('progressContainer').style.display='block';
-    document.getElementById('loading').style.display='block';
-    document.getElementById('resultContainer').style.display='none';
-    try {
-        const response = await fetch('/upload',{method:'POST',body:formData});
-        const result = await response.json();
-        analysisData = result;
+    progressContainer.style.display = 'block'; progressBar.style.width = '0%';
+    document.getElementById('loading').style.display = 'block';
+    document.getElementById('resultContainer').style.display = 'none';
+    showSkeleton(true);
+    let progress = 0; const interval = setInterval(() => { progress += 10; if(progress>=90) clearInterval(interval); progressBar.style.width = Math.min(progress,90)+'%'; }, 200);
+    try { 
+        const response = await fetch('/upload',{method:'POST',body:formData}); 
+        const result = await response.json(); 
+        progressBar.style.width='100%'; 
+        setTimeout(()=>{progressContainer.style.display='none';},500);
+        analysisData = result; 
+        showSkeleton(false);
         showConfetti();
-        showSmartSuggestions(result);
-    } catch(error){ alert('Ошибка: '+error.message); }
-    finally{ document.getElementById('loading').style.display='none'; document.getElementById('progressContainer').style.display='none'; }
+        showSmartSuggestions(result); 
+    }
+    catch(error){ alert('Ошибка: '+error.message); showSkeleton(false); progressContainer.style.display='none'; }
+    finally{ clearInterval(interval); document.getElementById('loading').style.display='none'; }
 }
+
 function drawChart(categories) {
-    const ctx = document.getElementById('expenseChart')?.getContext('2d');
-    if(!ctx) return;
+    const ctx = document.getElementById('expenseChart')?.getContext('2d'); if(!ctx) return;
     if(expenseChart) expenseChart.destroy();
     expenseChart = new Chart(ctx, { type:'pie', data:{ labels:Object.keys(categories), datasets:[{ data:Object.values(categories), backgroundColor:['#ea580c','#f97316','#c2410c','#fdba74','#9a3412','#7c2d12','#b45309','#d97706','#a16207'] }] }, options:{ responsive:true } });
 }
-function showSmartSuggestions(data) {
-    const insightsHtml = data.insights && data.insights.length ? data.insights.map(i=>`<div class="insight-item">${i}</div>`).join('') : '<div class="insight-item">Анализ выполнен</div>';
-    document.getElementById('insightsContainer').innerHTML = insightsHtml;
-    const buttons = [
-        { text:'📈 Полный отчёт', func:showFullReport },
-        { text:'🔮 Прогноз', func:showForecast },
-        { text:'💡 Советы', func:showTips },
-        { text:'📊 Категории', func:showCategories },
-        { text:'📈 Динамика', func:showTrend },
-        { text:'📅 Сезонность', func:showSeasonality },
-        { text:'💰 Себестоимость', func:showCost },
-        { text:'💬 Чат', func:showChat }
-    ];
-    let btns='';
-    for(let b of buttons) btns += `<button class="suggestion-btn" onclick="${b.func.name}()">${b.text}</button>`;
-    document.getElementById('suggestionButtons').innerHTML = btns;
-    document.getElementById('resultContainer').style.display = 'block';
+
+function drawTrendChart() {
+    const d = analysisData;
+    if(!d) return;
+    const ctx = document.getElementById('trendChart')?.getContext('2d'); if(!ctx) return;
+    if(trendChart) trendChart.destroy();
+    trendChart = new Chart(ctx, { 
+        type: 'line', 
+        data: { 
+            labels: ['Неделя 1', 'Неделя 2', 'Неделя 3', 'Неделя 4'], 
+            datasets: [
+                { 
+                    label: 'Доходы', 
+                    data: [d.income*0.6, d.income*0.8, d.income*0.9, d.income], 
+                    borderColor: '#f97316', 
+                    backgroundColor: 'rgba(249,115,22,0.1)', 
+                    tension: 0.4, 
+                    fill: true,
+                    pointBackgroundColor: '#ea580c',
+                    pointBorderColor: '#fff',
+                    pointRadius: 5,
+                    pointHoverRadius: 7
+                },
+                { 
+                    label: 'Расходы', 
+                    data: [d.expense*0.7, d.expense*0.85, d.expense*0.95, d.expense], 
+                    borderColor: '#ef4444', 
+                    backgroundColor: 'rgba(239,68,68,0.1)', 
+                    tension: 0.4, 
+                    fill: true,
+                    pointBackgroundColor: '#dc2626',
+                    pointBorderColor: '#fff',
+                    pointRadius: 5,
+                    pointHoverRadius: 7
+                }
+            ] 
+        }, 
+        options: { 
+            responsive: true, 
+            maintainAspectRatio: true, 
+            animation: { duration: 1000, easing: 'easeOutCubic' },
+            plugins: { legend: { position: 'top', labels: { color: '#ffffff' } } } 
+        } 
+    });
 }
+
+function showSmartSuggestions(data) {
+    const insightsHtml = data.insights && data.insights.length ? data.insights.map(i=>`<div class="insight-item"><i class="fas fa-info-circle" style="color:#f97316;"></i> ${escapeHtml(i)}</div>`).join('') : '<div class="insight-item"><i class="fas fa-check-circle" style="color:#f97316;"></i> Анализ выполнен успешно</div>';
+    document.getElementById('insightsContainer').innerHTML = insightsHtml;
+    const allButtons = [
+        { key: 'full', text: '📈 Полный отчёт', func: showFullReport, title: 'Показать доходы, расходы и прибыль' },
+        { key: 'forecast', text: '🔮 Прогноз', func: showForecast, title: 'Прогноз расходов на следующий месяц' },
+        { key: 'savings', text: '💡 Советы', func: showTips, title: 'Персональные советы по экономии' },
+        { key: 'categories', text: '📊 Категории', func: showCategories, title: 'Анализ расходов по категориям' },
+        { key: 'trend', text: '📈 Динамика', func: showTrend, title: 'График изменения доходов и расходов' },
+        { key: 'seasonality', text: '📅 Сезонность', func: showSeasonality, title: 'Анализ трат по месяцам и дням недели' },
+        { key: 'cost', text: '💰 Себестоимость', func: showCost, title: 'Расчёт себестоимости товара' },
+        { key: 'chat', text: '💬 Чат', func: showChat, title: 'Задать вопрос ИИ о финансах' }
+    ];
+    let buttonsHtml = '';
+    for(let btn of allButtons) buttonsHtml += `<button class="suggestion-btn" onclick="${btn.func.name}()" title="${btn.title}"><i class="fas ${btn.key==='full'?'fa-chart-simple':btn.key==='forecast'?'fa-calendar-week':btn.key==='savings'?'fa-lightbulb':btn.key==='categories'?'fa-tags':btn.key==='trend'?'fa-chart-line':btn.key==='seasonality'?'fa-chart-gantt':btn.key==='cost'?'fa-calculator':'fa-comments'}"></i> ${btn.text}</button>`;
+    document.getElementById('suggestionButtons').innerHTML = buttonsHtml;
+    document.getElementById('resultContainer').style.display = 'block';
+    if(window.innerWidth<=768 && mobileMenu) mobileMenu.style.display = 'none';
+}
+
 function showFullReport() {
     const d = analysisData;
-    document.getElementById('reportContent').innerHTML = `<h3>Отчёт</h3><div class="result-stats"><div class="stat-card income"><div class="value">${d.income.toFixed(2)} ₽</div><div class="label">Доходы</div></div><div class="stat-card expense"><div class="value">${d.expense.toFixed(2)} ₽</div><div class="label">Расходы</div></div><div class="stat-card"><div class="value">${d.net_profit.toFixed(2)} ₽</div><div class="label">Прибыль</div></div></div><div class="info">Строк: ${d.rows_count}, Доходов: ${d.incomes_count}, Расходов: ${d.expenses_count}</div>`;
+    const profitClass = d.net_profit >= 0 ? 'profit-positive' : 'profit-negative';
+    document.getElementById('reportContent').innerHTML = `<h3><i class="fas fa-chart-simple"></i> Отчёт CashFlow</h3><div class="result-stats"><div class="stat-card income"><div class="value">${d.income.toFixed(2)} ₽</div><div class="label">Доходы</div></div><div class="stat-card expense"><div class="value">${d.expense.toFixed(2)} ₽</div><div class="label">Расходы</div></div><div class="stat-card ${profitClass}"><div class="value">${d.net_profit>=0?'+':''}${d.net_profit.toFixed(2)} ₽</div><div class="label">Чистая прибыль</div></div></div><div class="info"><i class="fas fa-info-circle"></i> Обработано строк: ${d.rows_count}<br><i class="fas fa-arrow-up"></i> Доходов: ${d.incomes_count}, <i class="fas fa-arrow-down"></i> Расходов: ${d.expenses_count}</div>`;
     showBlock('fullReport');
 }
+
 function showForecast() {
     const d = analysisData;
-    if(d.predicted_total) document.getElementById('forecastContent').innerHTML = `<div class="forecast-box"><h3>Прогноз</h3><div>Прогнозируемые расходы: ${d.predicted_total.toFixed(2)} ₽</div><div>Изменение: ${d.predicted_change>0?'+':''}${d.predicted_change.toFixed(1)}%</div></div>`;
-    else document.getElementById('forecastContent').innerHTML = '<p>Нет данных</p>';
+    if(d.predicted_total && d.predicted_total>0){
+        const changeColor = d.predicted_change >= 0 ? '#ef4444' : '#f97316';
+        const changeIcon = d.predicted_change >= 0 ? '📈' : '📉';
+        document.getElementById('forecastContent').innerHTML = `<div class="forecast-box"><h3><i class="fas fa-calendar-week"></i> Прогноз на следующий месяц</h3><div class="result-stats"><div class="stat-card"><div class="value" style="color:#f97316;">${d.predicted_total.toFixed(2)} ₽</div><div class="label">Прогнозируемые расходы</div></div><div class="stat-card"><div class="value" style="color:${changeColor};">${changeIcon} ${d.predicted_change>=0?'+':''}${d.predicted_change.toFixed(1)}%</div><div class="label">Изменение</div></div></div><div class="info"><i class="fas fa-chart-line"></i> Прогноз основан на ${d.days_count||'?'} днях</div></div>`;
+    } else document.getElementById('forecastContent').innerHTML = '<p><i class="fas fa-ban"></i> Нет данных для прогноза</p>';
     showBlock('forecastBlock');
 }
+
 function showTips() {
     const d = analysisData;
     if(d.tips){
         const items = d.tips.split('•').filter(i=>i.trim());
-        document.getElementById('tipsContent').innerHTML = `<div class="tips-box"><ul>${items.map(i=>`<li>${i.trim()}</li>`).join('')}</ul></div>`;
-    } else document.getElementById('tipsContent').innerHTML = '<p>Нет советов</p>';
+        document.getElementById('tipsContent').innerHTML = `<div class="tips-box"><h3><i class="fas fa-lightbulb"></i> Советы по экономии</h3><ul>${items.map(i=>`<li><i class="fas fa-check-circle" style="color:#f97316;"></i> ${escapeHtml(i.trim())}</li>`).join('')}</ul></div>`;
+    } else document.getElementById('tipsContent').innerHTML = '<p><i class="fas fa-ban"></i> Нет советов</p>';
     showBlock('tipsBlock');
 }
+
 function showCategories() {
     const d = analysisData;
-    if(d.categories){
-        let table = '<h3>Расходы по категориям</h3>20table<th>Категория</th><th>Сумма</th></tr>';
-        for(const [cat,amt] of Object.entries(d.categories)) table += `<tr><td>${cat}</td><td>${amt.toFixed(2)} ₽</td></tr>`;
+    if(d.categories && Object.keys(d.categories).length){
+        let table = '<h3><i class="fas fa-tags"></i> Расходы по категориям</h3>20table<th>Категория</th><th>Сумма (RUB)</th></tr>';
+        for(const [cat,amt] of Object.entries(d.categories)){
+            const icon = {'Аренда':'🏠','Сырьё и товары':'📦','Реклама':'📢','Налоги':'📄','Транспорт':'🚗','Продукты':'🍎','Кафе и рестораны':'🍽️','Образование':'📚','Прочее':'📌'}[cat] || '💰';
+            table += `<tr><td><span class="category-icon">${icon}</span> ${cat}</td><td>${amt.toFixed(2)} ₽</span></td></tr>`;
+        }
         table += '</table>';
         document.getElementById('categoriesContent').innerHTML = table;
         drawChart(d.categories);
-    } else document.getElementById('categoriesContent').innerHTML = '<p>Нет данных</p>';
+    } else document.getElementById('categoriesContent').innerHTML = '<p><i class="fas fa-ban"></i> Нет данных для категоризации</p>';
     showBlock('categoriesBlock');
 }
+
 function showTrend() {
-    const d = analysisData;
-    if(trendChart) trendChart.destroy();
-    const ctx = document.getElementById('trendChart')?.getContext('2d');
-    if(ctx){
-        trendChart = new Chart(ctx, { type:'line', data:{ labels:['Нед 1','Нед 2','Нед 3','Нед 4'], datasets:[{ label:'Доходы', data:[d.income*0.6,d.income*0.8,d.income*0.9,d.income], borderColor:'#f97316', fill:false },{ label:'Расходы', data:[d.expense*0.7,d.expense*0.85,d.expense*0.95,d.expense], borderColor:'#ef4444', fill:false }] }, options:{ responsive:true } });
-    }
+    drawTrendChart();
     showBlock('trendBlock');
 }
+
 function showSeasonality() {
     const s = analysisData.seasonality || {};
-    if(!s.has_data) document.getElementById('seasonalityContent').innerHTML = '<p>Нет данных</p>';
+    if(!s.has_data) document.getElementById('seasonalityContent').innerHTML = '<p><i class="fas fa-ban"></i> Нет данных о датах для анализа сезонности</p>';
     else {
-        let html = '<h3>Сезонность</h3>';
+        let html = '<h3><i class="fas fa-chart-gantt"></i> Анализ сезонности</h3>';
         if(s.expense_by_month){
             const months = ['Янв','Фев','Мар','Апр','Май','Июн','Июл','Авг','Сен','Окт','Ноя','Дек'];
             const vals = months.map((_,i)=>s.expense_by_month[i+1]||0);
             const maxVal = Math.max(...vals,1);
-            html += '<div class="bar-chart" style="display:flex; gap:0.5rem; overflow-x:auto;">';
-            vals.forEach((v,i)=>html+=`<div class="bar" style="text-align:center; min-width:50px;"><div style="height:${(v/maxVal)*80}px; width:30px; background:#f97316; border-radius:8px 8px 0 0; margin:0 auto;"></div><div>${months[i]}</div><div>${v.toFixed(0)}</div></div>`);
+            html += '<h4>Расходы по месяцам</h4><div class="bar-chart">';
+            vals.forEach((v,i)=>html+=`<div class="bar"><div class="bar-column" style="height:${(v/maxVal)*80}px"></div><div>${months[i]}</div><div style="font-size:0.6rem;">${v.toFixed(0)}</div></div>`);
             html+='</div>';
         }
+        if(s.by_weekday){
+            const days = ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
+            const vals = days.map(d=>s.by_weekday[d]||0);
+            const maxVal = Math.max(...vals,1);
+            html += '<h4>Расходы по дням недели</h4><div class="bar-chart">';
+            vals.forEach((v,i)=>html+=`<div class="bar"><div class="bar-column" style="height:${(v/maxVal)*80}px;background:#f97316"></div><div>${days[i]}</div><div style="font-size:0.6rem;">${v.toFixed(0)}</div></div>`);
+            html+='</div>';
+        }
+        if(s.max_expense_month) html += `<div class="info"><i class="fas fa-chart-line"></i> Пик расходов: ${s.max_expense_month.name} — ${s.max_expense_month.amount.toFixed(2)} ₽</div>`;
         document.getElementById('seasonalityContent').innerHTML = html;
     }
     showBlock('seasonalityBlock');
 }
+
 function showCost() { showBlock('costBlock'); }
 function showChat() { showBlock('chatBlock'); }
+
 function showBlock(id) {
     const blocks = ['fullReport','forecastBlock','tipsBlock','categoriesBlock','trendBlock','seasonalityBlock','costBlock','chatBlock'];
     blocks.forEach(b=>document.getElementById(b).style.display='none');
-    document.getElementById(id).style.display='block';
+    document.getElementById(id).style.display = 'block';
+    if(window.innerWidth<=768 && mobileMenu) mobileMenu.style.display='none';
+    window.scrollTo({ top: document.getElementById(id).offsetTop-20, behavior:'smooth' });
 }
+
 async function askQuestion() {
     const q = document.getElementById('questionInput').value.trim();
     if(!q) return;
     const chatDiv = document.getElementById('chatMessages');
-    chatDiv.innerHTML += `<div class="chat-message-user"><span>${q}</span></div>`;
+    if(chatDiv.children.length===1 && chatDiv.children[0].textContent.includes('Задайте вопрос')) chatDiv.innerHTML='';
+    chatDiv.innerHTML += `<div class="chat-message-user"><span>${escapeHtml(q)}</span></div>`;
     document.getElementById('questionInput').value='';
-    chatDiv.innerHTML += `<div class="typing" style="opacity:0.7;">ИИ печатает...</div>`;
+    chatDiv.innerHTML += `<div class="typing">ИИ печатает...</div>`;
     try{
         const res = await fetch('/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:q})});
         const data = await res.json();
         document.querySelector('.typing')?.remove();
-        chatDiv.innerHTML += `<div class="chat-message-bot"><span>${data.answer}</span></div>`;
+        chatDiv.innerHTML += `<div class="chat-message-bot"><span>${escapeHtml(data.answer)}</span></div>`;
     } catch(e){ document.querySelector('.typing')?.remove(); chatDiv.innerHTML += `<div class="chat-message-bot"><span>Ошибка</span></div>`; }
 }
+
 function calculateCost() {
     const name = document.getElementById('productName').value.trim();
     const mat = parseFloat(document.getElementById('materialCost').value);
@@ -979,8 +1088,12 @@ function calculateCost() {
     const cost = (mat*qty + labor*qty + totalExp)/qty;
     const price = cost*1.5;
     const breakeven = Math.ceil(totalExp / (price - (mat + labor)));
-    document.getElementById('costResult').innerHTML = `<div style="background:rgba(234,88,12,0.2);padding:1rem;border-radius:16px;"><h4>${name}</h4><div>Себестоимость: ${cost.toFixed(2)} ₽</div><div>Рекомендуемая цена: ${price.toFixed(2)} ₽</div><div>Точка безубыточности: ${breakeven} шт./мес.</div></div>`;
+    document.getElementById('costResult').innerHTML = `<div style="background:rgba(234,88,12,0.2);backdrop-filter:blur(5px);padding:1rem;border-radius:16px;"><h4>Результаты: ${escapeHtml(name)}</h4><div>Себестоимость: ${cost.toFixed(2)} ₽</div><div>Рекомендуемая цена: ${price.toFixed(2)} ₽</div><div>Точка безубыточности: ${breakeven} шт./мес.</div></div>`;
+    document.getElementById('costResult').style.display = 'block';
 }
+
+function escapeHtml(t){ const d=document.createElement('div'); d.textContent=t; return d.innerHTML; }
+
 const menuBtn=document.getElementById('menuBtn'), mobileMenu=document.getElementById('mobileMenu');
 if(menuBtn && mobileMenu){
     menuBtn.onclick=()=>{ mobileMenu.style.display=mobileMenu.style.display==='none'?'block':'none'; };
@@ -991,7 +1104,8 @@ if(menuBtn && mobileMenu){
 }
 </script>
 </body>
-</html>"""
+</html>
+"""
 
 @app.get("/")
 async def home():
@@ -1011,4 +1125,4 @@ async def upload_file(file: UploadFile = File(...)):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=7860)
+    uvicorn.run(app, host="0.0.0.0", port=10000)
