@@ -485,7 +485,7 @@ html_content = '''
         .bar-label { font-size: 0.7rem; margin-bottom: 0.3rem; }
         .bar-wrapper { height: 120px; display: flex; align-items: flex-end; justify-content: center; margin-bottom: 0.3rem; }
         .bar-fill { width: 30px; border-radius: 12px 12px 0 0; transition: height 0.6s ease-out; }
-        .bar-value { font-size: 0.7rem; font-weight: bold; }
+        .bar-value { font-size: 0.7rem; font-weight: bold; color: #f97316; }
         .cost-result-card { background: rgba(16,185,129,0.1); border-radius: 20px; padding: 1rem; margin-top: 1rem; }
         .cost-result-header { font-size: 1rem; font-weight: bold; margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem; color: #f97316; }
         .cost-result-grid { display: flex; flex-wrap: wrap; gap: 1rem; justify-content: space-between; }
@@ -670,7 +670,7 @@ function showCategories() {
         let table = '<h3><i class="fas fa-tags"></i> Расходы по категориям</h3>20table<th>Категория</th><th>Сумма (RUB)</th></tr>';
         for(const [cat,amt] of Object.entries(d.categories)){
             const icon = {'Аренда':'🏠','Сырьё и товары':'📦','Реклама':'📢','Налоги':'📄','Транспорт':'🚗','Продукты':'🍎','Кафе и рестораны':'🍽️','Образование':'📚','Прочее':'📌'}[cat] || '💰';
-            table += `<tr><td><span class="category-icon">${icon}</span> ${cat}</td>工作领导小组${amt.toFixed(2)} ₽</span></td>`;
+            table += `<tr><td><span class="category-icon">${icon}</span> ${cat}</td><td>${amt.toFixed(2)} ₽</td></tr>`;
         }
         table += '</table>';
         document.getElementById('categoriesContent').innerHTML = table;
@@ -696,7 +696,13 @@ function showSeasonality() {
         html += '<div class="seasonality-card"><h4><i class="fas fa-calendar-alt"></i> Расходы по месяцам</h4><div class="bar-chart-modern">';
         vals.forEach((v,i)=>{
             const percent = (v / maxVal) * 100;
-            html += `<div class="bar-item"><div class="bar-label">${months[i]}</div><div class="bar-wrapper"><div class="bar-fill" style="height: ${percent}%; width: 100%; background: linear-gradient(180deg, #f97316, #ea580c);"></div></div><div class="bar-value">${v.toFixed(0)} ₽</div></div>`;
+            html += `<div class="bar-item">
+                        <div class="bar-label">${months[i]}</div>
+                        <div class="bar-wrapper">
+                            <div class="bar-fill" style="height: ${percent}%; width: 100%; background: linear-gradient(180deg, #f97316, #ea580c);"></div>
+                        </div>
+                        <div class="bar-value">${v.toFixed(0)} ₽</div>
+                    </div>`;
         });
         html += '</div></div>';
     }
@@ -707,7 +713,13 @@ function showSeasonality() {
         html += '<div class="seasonality-card"><h4><i class="fas fa-calendar-week"></i> Расходы по дням недели</h4><div class="bar-chart-modern">';
         vals.forEach((v,i)=>{
             const percent = (v / maxVal) * 100;
-            html += `<div class="bar-item"><div class="bar-label">${days[i]}</div><div class="bar-wrapper"><div class="bar-fill" style="height: ${percent}%; width: 100%; background: linear-gradient(180deg, #3b82f6, #1d4ed8);"></div></div><div class="bar-value">${v.toFixed(0)} ₽</div></div>`;
+            html += `<div class="bar-item">
+                        <div class="bar-label">${days[i]}</div>
+                        <div class="bar-wrapper">
+                            <div class="bar-fill" style="height: ${percent}%; width: 100%; background: linear-gradient(180deg, #3b82f6, #1d4ed8);"></div>
+                        </div>
+                        <div class="bar-value">${v.toFixed(0)} ₽</div>
+                    </div>`;
         });
         html += '</div></div>';
     }
@@ -745,6 +757,21 @@ async function askQuestion() {
     } catch(e){ document.querySelector('.typing')?.remove(); chatDiv.innerHTML += `<div class="chat-message-bot"><span><i class="fas fa-exclamation-triangle"></i> Ошибка</span></div>`; }
 }
 
+function animateValue(elementId, start, end, duration, suffix) {
+    const element = document.getElementById(elementId);
+    if(!element) return;
+    const range = end - start;
+    const startTime = performance.now();
+    function update(currentTime) {
+        const elapsed = currentTime - startTime;
+        const progress = Math.min(elapsed / duration, 1);
+        const value = start + (range * progress);
+        element.textContent = Math.round(value) + suffix;
+        if(progress < 1) requestAnimationFrame(update);
+    }
+    requestAnimationFrame(update);
+}
+
 function calculateCost() {
     const name = document.getElementById('productName').value.trim();
     const mat = parseFloat(document.getElementById('materialCost').value);
@@ -760,7 +787,33 @@ function calculateCost() {
     const breakeven = Math.ceil(totalExp / (price - (mat + labor)));
     const resultDiv = document.getElementById('costResult');
     resultDiv.style.display = 'block';
-    resultDiv.innerHTML = `<div class="cost-result-card"><div class="cost-result-header"><i class="fas fa-chart-line"></i> Результаты: ${escapeHtml(name)}</div><div class="cost-result-grid"><div class="cost-result-item"><div class="cost-result-icon"><i class="fas fa-cubes"></i></div><div class="cost-result-label">Себестоимость единицы</div><div class="cost-result-value" id="costValue">${cost.toFixed(2)} ₽</div></div><div class="cost-result-item"><div class="cost-result-icon"><i class="fas fa-tag"></i></div><div class="cost-result-label">Рекомендуемая цена</div><div class="cost-result-value" id="priceValue">${price.toFixed(2)} ₽</div></div><div class="cost-result-item"><div class="cost-result-icon"><i class="fas fa-chart-simple"></i></div><div class="cost-result-label">Точка безубыточности</div><div class="cost-result-value" id="breakevenValue">${breakeven} шт./мес</div></div></div></div>`;
+    resultDiv.innerHTML = `
+        <div class="cost-result-card">
+            <div class="cost-result-header">
+                <i class="fas fa-chart-line"></i> Результаты: ${escapeHtml(name)}
+            </div>
+            <div class="cost-result-grid">
+                <div class="cost-result-item">
+                    <div class="cost-result-icon"><i class="fas fa-cubes"></i></div>
+                    <div class="cost-result-label">Себестоимость единицы</div>
+                    <div class="cost-result-value" id="costValue">0 ₽</div>
+                </div>
+                <div class="cost-result-item">
+                    <div class="cost-result-icon"><i class="fas fa-tag"></i></div>
+                    <div class="cost-result-label">Рекомендуемая цена</div>
+                    <div class="cost-result-value" id="priceValue">0 ₽</div>
+                </div>
+                <div class="cost-result-item">
+                    <div class="cost-result-icon"><i class="fas fa-chart-simple"></i></div>
+                    <div class="cost-result-label">Точка безубыточности</div>
+                    <div class="cost-result-value" id="breakevenValue">0 шт./мес</div>
+                </div>
+            </div>
+        </div>
+    `;
+    animateValue('costValue', 0, cost, 1000, ' ₽');
+    animateValue('priceValue', 0, price, 1000, ' ₽');
+    animateValue('breakevenValue', 0, breakeven, 1000, ' шт./мес');
 }
 
 function escapeHtml(t){ const d=document.createElement('div'); d.textContent=t; return d.innerHTML; }
