@@ -171,6 +171,7 @@ def analyze_statement(file_content: bytes, filename: str):
     
     predicted_total, predicted_change, _ = predict_next_month(categories, total_expense, days_count)
     
+    # Сезонность
     seasonality = {'has_data': False}
     if date_col and len(df) > 0:
         seasonality['has_data'] = True
@@ -486,20 +487,64 @@ html_content = '''
         .bar-wrapper { height: 120px; display: flex; align-items: flex-end; justify-content: center; margin-bottom: 0.3rem; }
         .bar-fill { width: 30px; border-radius: 12px 12px 0 0; transition: height 0.6s ease-out; }
         .bar-value { font-size: 0.7rem; font-weight: bold; color: #f97316; }
-        .cost-result-card { background: rgba(16,185,129,0.1); border-radius: 20px; padding: 1rem; margin-top: 1rem; }
-        .cost-result-header { font-size: 1rem; font-weight: bold; margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem; color: #f97316; }
-        .cost-result-grid { display: flex; flex-wrap: wrap; gap: 1rem; justify-content: space-between; }
+        /* Оранжевый дизайн для себестоимости */
+        .cost-input-grid {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+        .cost-input-grid input {
+            background: rgba(0,0,0,0.5);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 12px 16px;
+            color: var(--text-primary);
+            font-size: 0.9rem;
+        }
+        .cost-input-grid input:focus {
+            outline: none;
+            border-color: var(--accent);
+            box-shadow: 0 0 0 2px rgba(249,115,22,0.2);
+        }
+        .cost-result-card {
+            background: rgba(234, 88, 12, 0.1);
+            border: 1px solid rgba(249,115,22,0.3);
+            border-radius: 20px;
+            padding: 1.2rem;
+            margin-top: 1rem;
+            backdrop-filter: blur(5px);
+        }
+        .cost-result-header {
+            font-size: 1rem;
+            font-weight: bold;
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            color: var(--accent);
+            border-bottom: 1px solid rgba(249,115,22,0.3);
+            padding-bottom: 0.5rem;
+        }
+        .cost-result-grid {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1rem;
+            justify-content: space-between;
+        }
         .cost-result-item {
             flex: 1;
-            min-width: 150px;
-            background: rgba(0,0,0,0.3);
+            min-width: 140px;
+            background: rgba(0,0,0,0.4);
             border-radius: 16px;
-            padding: 0.8rem;
+            padding: 1rem;
             text-align: center;
+            transition: transform 0.2s;
         }
-        .cost-result-icon { font-size: 1.5rem; color: #f97316; margin-bottom: 0.3rem; }
-        .cost-result-label { font-size: 0.7rem; opacity: 0.7; }
-        .cost-result-value { font-size: 1.1rem; font-weight: bold; margin-top: 0.3rem; color: #f97316; }
+        .cost-result-item:hover { transform: translateY(-2px); }
+        .cost-result-icon { font-size: 1.8rem; color: var(--accent); margin-bottom: 0.5rem; }
+        .cost-result-label { font-size: 0.7rem; opacity: 0.8; margin-top: 0.3rem; }
+        .cost-result-value { font-size: 1.2rem; font-weight: bold; margin-top: 0.3rem; color: var(--accent); }
         @media (max-width: 768px) {
             body { padding: 0.8rem; }
             .desktop-title { display: none; }
@@ -544,7 +589,17 @@ html_content = '''
         <div id="categoriesBlock" class="card" style="display:none;"><div id="categoriesContent"></div><canvas id="expenseChart" style="max-width:300px; margin:1rem auto;"></canvas></div>
         <div id="trendBlock" class="card" style="display:none;"><canvas id="trendChart"></canvas></div>
         <div id="seasonalityBlock" class="card" style="display:none;"><div id="seasonalityContent"></div></div>
-        <div id="costBlock" class="card" style="display:none;"><h3>Расчёт себестоимости</h3><div class="cost-input-grid"><input type="text" id="productName" placeholder="Название товара"><input type="number" id="materialCost" placeholder="Сырьё"><input type="number" id="timeMinutes" placeholder="Время (мин)"><input type="number" id="quantityMonth" placeholder="Кол-во в месяц"><button class="btn" onclick="calculateCost()">Рассчитать</button></div><div id="costResult"></div></div>
+        <div id="costBlock" class="card" style="display:none;">
+            <h3>💰 Расчёт себестоимости</h3>
+            <div class="cost-input-grid">
+                <input type="text" id="productName" placeholder="Название товара/услуги">
+                <input type="number" id="materialCost" placeholder="Сырьё на 1 ед. (руб)">
+                <input type="number" id="timeMinutes" placeholder="Время на 1 ед. (мин)">
+                <input type="number" id="quantityMonth" placeholder="Количество в месяц">
+                <button class="btn" onclick="calculateCost()">Рассчитать</button>
+            </div>
+            <div id="costResult"></div>
+        </div>
         <div id="chatBlock" class="card" style="display:none;"><h3>Чат с ИИ</h3><div class="chat-messages" id="chatMessages"><div>Задайте вопрос о финансах</div></div><div class="chat-input"><input type="text" id="questionInput" placeholder="Например: на чём мне сэкономить?"><button class="btn" onclick="askQuestion()">Отправить</button></div></div>
     </div>
 </div>
@@ -683,8 +738,8 @@ function showTrend() { drawTrendChart(); showBlock('trendBlock'); }
 
 function showSeasonality() {
     const s = analysisData.seasonality || {};
-    if(!s.has_data) {
-        document.getElementById('seasonalityContent').innerHTML = '<div class="info"><i class="fas fa-chart-line"></i> Добавьте даты в выписку для анализа сезонности</div>';
+    if(!s.has_data || !s.expense_by_month || Object.keys(s.expense_by_month).length === 0) {
+        document.getElementById('seasonalityContent').innerHTML = '<div class="info"><i class="fas fa-chart-line"></i> Нет данных для анализа сезонности. Загрузите файл с датами.</div>';
         showBlock('seasonalityBlock');
         return;
     }
@@ -693,7 +748,7 @@ function showSeasonality() {
         const months = ['Янв','Фев','Мар','Апр','Май','Июн','Июл','Авг','Сен','Окт','Ноя','Дек'];
         const vals = months.map((_,i)=>s.expense_by_month[i+1]||0);
         const maxVal = Math.max(...vals,1);
-        html += '<div class="seasonality-card"><h4><i class="fas fa-calendar-alt"></i> Расходы по месяцам</h4><div class="bar-chart-modern">';
+        html += '<div class="seasonality-card"><h4><i class="fas fa-calendar-alt"></i> Расходы по месяцам (₽)</h4><div class="bar-chart-modern">';
         vals.forEach((v,i)=>{
             const percent = (v / maxVal) * 100;
             html += `<div class="bar-item">
@@ -706,11 +761,11 @@ function showSeasonality() {
         });
         html += '</div></div>';
     }
-    if(s.by_weekday){
+    if(s.by_weekday && Object.keys(s.by_weekday).length > 0){
         const days = ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
         const vals = days.map(d=>s.by_weekday[d]||0);
         const maxVal = Math.max(...vals,1);
-        html += '<div class="seasonality-card"><h4><i class="fas fa-calendar-week"></i> Расходы по дням недели</h4><div class="bar-chart-modern">';
+        html += '<div class="seasonality-card"><h4><i class="fas fa-calendar-week"></i> Расходы по дням недели (₽)</h4><div class="bar-chart-modern">';
         vals.forEach((v,i)=>{
             const percent = (v / maxVal) * 100;
             html += `<div class="bar-item">
