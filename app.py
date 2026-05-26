@@ -573,7 +573,7 @@ html_content = '''
             <div class="subtitle">ИИ-финансовый ассистент для микробизнеса</div>
         </div>
         <div class="card">
-            <div class="upload-area" onclick="document.getElementById("fileInput").click()">
+            <div class="upload-area" onclick="document.getElementById('fileInput').click()">
                 <i class="fas fa-cloud-upload-alt"></i>
                 <p>Нажмите или перетащите файл</p>
                 <p style="font-size:0.7rem;opacity:0.7;">Поддерживаются: CSV, Excel, PDF</p>
@@ -1046,10 +1046,10 @@ html_content = '''
         function showCategories() {
             const d = analysisData;
             if(d.categories && Object.keys(d.categories).length){
-                let table = "<h3><i class=\"fas fa-tags\"></i> Расходы по категориям</h3>20table<th>Категория</th><th>Сумма (RUB)</th></td>";
+                let table = "<h3><i class=\"fas fa-tags\"></i> Расходы по категориям</h3>20table<th>Категория</th><th>Сумма (RUB)</th><tr>";
                 for(const [cat,amt] of Object.entries(d.categories)){
                     const icon = {"Аренда":"🏠","Сырьё и товары":"📦","Реклама":"📢","Налоги":"📄","Транспорт":"🚗","Продукты":"🍎","Кафе и рестораны":"🍽️","Образование":"📚","Прочее":"📌"}[cat] || "💰";
-                    table += "<tr><td><span class=\"category-icon\">"+icon+"</span> "+cat+"</td><td>"+amt.toFixed(2)+" ₽</td></tr>";
+                    table += "<tr><td><span class=\"category-icon\">"+icon+"</span> "+cat+"</td>ows<td>"+amt.toFixed(2)+" ₽</span></td></tr>";
                 }
                 table += "</table>";
                 document.getElementById("categoriesContent").innerHTML = table;
