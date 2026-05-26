@@ -46,14 +46,12 @@ category_names = {
 }
 
 def detect_income_expense(row):
-    # Проверяем колонку type
     if 'type' in row and pd.notna(row['type']):
         type_val = str(row['type']).lower()
         if 'списание' in type_val or 'оплата' in type_val:
             return 'expense', abs(float(row['amount'])) if 'amount' in row else 0
         if 'пополнение' in type_val:
             return 'income', abs(float(row['amount'])) if 'amount' in row else 0
-    # По знаку amount
     if 'amount' in row:
         val = float(row['amount'])
         if val < 0:
@@ -123,7 +121,6 @@ def analyze_statement(file_content: bytes, filename: str):
         'rows_count': len(df)
     }
 
-# Простой HTML
 html_content = '''
 <!DOCTYPE html>
 <html>
@@ -146,6 +143,8 @@ html_content = '''
         .suggestion-buttons { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 20px; }
         .suggestion-btn { background: #2a2a2a; border: 1px solid #f97316; padding: 10px 20px; border-radius: 40px; cursor: pointer; color: white; }
         .suggestion-btn:hover { background: #f97316; }
+        .spinner { width: 40px; height: 40px; border: 4px solid #333; border-top-color: #f97316; border-radius: 50%; animation: spin 1s linear infinite; margin: 0 auto; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
 </head>
 <body>
@@ -153,7 +152,7 @@ html_content = '''
         <h1>💰 CashFlow</h1>
         <p>ИИ-финансовый ассистент для микробизнеса</p>
         
-        <div class="upload-area" onclick="document.getElementById('fileInput').click()">
+        <div class="upload-area" id="dropZone">
             <p>📁 Нажмите или перетащите файл</p>
             <p>Поддерживаются: CSV, Excel</p>
             <input type="file" id="fileInput" accept=".csv,.xlsx,.xls" style="display: none;">
@@ -163,7 +162,7 @@ html_content = '''
     </div>
     
     <div id="loading" style="display:none; text-align:center; padding:40px;">
-        <div class="spinner" style="width:40px; height:40px; border:4px solid #333; border-top-color:#f97316; border-radius:50%; animation:spin 1s linear infinite; margin:0 auto;"></div>
+        <div class="spinner"></div>
         <p>Анализирую выписку с помощью ИИ...</p>
     </div>
     
@@ -173,21 +172,11 @@ html_content = '''
             <div id="insightsContainer"></div>
             <div id="suggestionButtons" class="suggestion-buttons"></div>
         </div>
-        <div id="fullReport" class="card" style="display:none;">
-            <div id="reportContent"></div>
-        </div>
-        <div id="tipsBlock" class="card" style="display:none;">
-            <div id="tipsContent"></div>
-        </div>
-        <div id="categoriesBlock" class="card" style="display:none;">
-            <div id="categoriesContent"></div>
-        </div>
+        <div id="fullReport" class="card" style="display:none;"><div id="reportContent"></div></div>
+        <div id="tipsBlock" class="card" style="display:none;"><div id="tipsContent"></div></div>
+        <div id="categoriesBlock" class="card" style="display:none;"><div id="categoriesContent"></div></div>
     </div>
-    
-    <style>
-        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-    </style>
-    
+
     <script>
         let selectedFile = null;
         let analysisData = null;
@@ -195,7 +184,14 @@ html_content = '''
         const fileInput = document.getElementById('fileInput');
         const analyzeBtn = document.getElementById('analyzeBtn');
         const fileNameDiv = document.getElementById('fileName');
+        const dropZone = document.getElementById('dropZone');
         
+        // Выбор файла через кнопку
+        dropZone.onclick = function() {
+            fileInput.click();
+        };
+        
+        // Обработка выбора файла
         fileInput.onchange = function() {
             if (fileInput.files.length > 0) {
                 selectedFile = fileInput.files[0];
@@ -205,6 +201,30 @@ html_content = '''
             }
         };
         
+        // Перетаскивание файла
+        dropZone.ondragover = function(e) {
+            e.preventDefault();
+            dropZone.style.borderColor = "#f97316";
+        };
+        
+        dropZone.ondragleave = function(e) {
+            e.preventDefault();
+            dropZone.style.borderColor = "#2a2a2a";
+        };
+        
+        dropZone.ondrop = function(e) {
+            e.preventDefault();
+            dropZone.style.borderColor = "#2a2a2a";
+            if (e.dataTransfer.files.length) {
+                fileInput.files = e.dataTransfer.files;
+                selectedFile = fileInput.files[0];
+                fileNameDiv.textContent = "📄 Выбран файл: " + selectedFile.name;
+                fileNameDiv.style.display = "block";
+                analyzeBtn.disabled = false;
+            }
+        };
+        
+        // Функция анализа
         async function uploadFile() {
             if (!selectedFile) return;
             
@@ -222,10 +242,14 @@ html_content = '''
                 showSmartSuggestions(result);
             } catch (error) {
                 alert('Ошибка: ' + error.message);
+                analyzeBtn.disabled = false;
             } finally {
                 document.getElementById('loading').style.display = 'none';
             }
         }
+        
+        // Привязываем функцию к кнопке
+        analyzeBtn.onclick = uploadFile;
         
         function showSmartSuggestions(data) {
             document.getElementById('insightsContainer').innerHTML = '<div class="info">✅ Анализ выполнен успешно</div>';
@@ -271,9 +295,9 @@ html_content = '''
         function showCategories() {
             const d = analysisData;
             if (d.categories && Object.keys(d.categories).length) {
-                let table = '<h3>📂 Расходы по категориям</h3>20table<th>Категория</th><th>Сумма (RUB)</th></tr>';
+                let table = '<h3>📂 Расходы по категориям</h3>20table<th>Категория</th><th>Сумма (RUB)</th><tr>';
                 for (const [cat, amt] of Object.entries(d.categories)) {
-                    table += `<tr><td>${cat}</td><td>${amt.toFixed(2)}</td></tr>`;
+                    table += `<tr><td>${cat}</td>工作领导小组${amt.toFixed(2)}</td></tr>`;
                 }
                 table += '</table>';
                 document.getElementById('categoriesContent').innerHTML = table;
