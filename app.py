@@ -124,26 +124,18 @@ def analyze_statement(file_content: bytes, filename: str):
     df = parse_file(file_content, filename)
     df.columns = df.columns.str.lower().str.strip()
     
-    # УМНЫЙ ПОИСК ДАТЫ (находит operationdate, transactiondate, date, дата)
+    # ПОИСК КОЛОНКИ С ДАТАМИ
     date_col = None
     for col in df.columns:
         col_lower = col.lower()
-        # Ищем любую колонку, содержащую date или дата
         if 'date' in col_lower or 'дата' in col_lower:
             date_col = col
             break
     
-    # Если не нашли стандартные, пробуем по названиям из твоего файла
-    if not date_col:
-        for col in ['operationdate', 'transactiondate', 'date']:
-            if col in df.columns:
-                date_col = col
-                break
-    
     days_count = 0
     if date_col:
         try:
-            df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
+            df[date_col] = pd.to_datetime(df[date_col], errors='coerce', dayfirst=True)
             date_min = df[date_col].min()
             date_max = df[date_col].max()
             if pd.notna(date_min) and pd.notna(date_max):
@@ -182,22 +174,25 @@ def analyze_statement(file_content: bytes, filename: str):
     
     predicted_total, predicted_change, _ = predict_next_month(categories, total_expense, days_count)
     
-    # Сезонность
+    # СЕЗОННОСТЬ — гарантированно заполняем
     seasonality = {'has_data': False}
     if date_col and len(df) > 0:
-        seasonality['has_data'] = True
-        seasonality['expense_by_month'] = {}
-        seasonality['by_weekday'] = {}
         try:
             temp_df = df[df['amount'] < 0].copy()
             if len(temp_df) > 0:
+                seasonality['has_data'] = True
+                seasonality['expense_by_month'] = {}
                 temp_df['month'] = pd.to_datetime(temp_df[date_col]).dt.month
                 for month in range(1, 13):
                     seasonality['expense_by_month'][month] = abs(temp_df[temp_df['month'] == month]['amount'].sum())
+                
+                seasonality['by_weekday'] = {}
                 temp_df['weekday'] = pd.to_datetime(temp_df[date_col]).dt.weekday
                 weekday_names = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
                 for i, name in enumerate(weekday_names):
                     seasonality['by_weekday'][name] = abs(temp_df[temp_df['weekday'] == i]['amount'].sum())
+                
+                print(f"📊 Сезонность: найдено {len(seasonality['expense_by_month'])} месяцев, {len(seasonality['by_weekday'])} дней")
         except Exception as e:
             print(f"Ошибка сезонности: {e}")
     
@@ -252,7 +247,6 @@ async def ask_question(request: Request):
     except Exception as e:
         return JSONResponse({'answer': f'Ошибка: {str(e)}'})
 
-# HTML-часть — та же самая, я её не менял. Вставь сюда свой полный HTML из предыдущего сообщения
 html_content = """
 <!DOCTYPE html>
 <html lang="ru">
@@ -733,12 +727,12 @@ function showTips() {
 function showCategories() {
     const d = analysisData;
     if(d.categories && Object.keys(d.categories).length){
-        let table = '<h3><i class="fas fa-tags"></i> Расходы по категориям</h3>20table<th>Категория</th><th>Сумма (RUB)</th></tr>';
+        let table = '<h3><i class="fas fa-tags"></i> Расходы по категориям</h3>20table<th>Категория</th><th>Сумма (RUB)</th><tr>';
         for(const [cat,amt] of Object.entries(d.categories)){
             const icon = {'Аренда':'🏠','Сырьё и товары':'📦','Реклама':'📢','Налоги':'📄','Транспорт':'🚗','Продукты':'🍎','Кафе и рестораны':'🍽️','Образование':'📚','Прочее':'📌'}[cat] || '💰';
-            table += `<tr><td><span class="category-icon">${icon}</span> ${cat}</td>工作领导小组${amt.toFixed(2)} ₽</span><tr>`;
+            table += `<tr><td><span class="category-icon">${icon}</span> ${cat}</td>工作领导小组${amt.toFixed(2)} ₽</span></tr>`;
         }
-        table += '<tr>';
+        table += '</table>';
         document.getElementById('categoriesContent').innerHTML = table;
         drawChart(d.categories);
     } else document.getElementById('categoriesContent').innerHTML = '<p><i class="fas fa-ban"></i> Нет данных для категоризации</p>';
@@ -748,13 +742,22 @@ function showCategories() {
 function showTrend() { drawTrendChart(); showBlock('trendBlock'); }
 
 function showSeasonality() {
-    const s = analysisData.seasonality || {};
-    if(!s.has_data || !s.expense_by_month || Object.keys(s.expense_by_month).length === 0) {
-        document.getElementById('seasonalityContent').innerHTML = '<div class="info"><i class="fas fa-chart-line"></i> Нет данных для анализа сезонности. Убедитесь, что в файле есть колонка с датами (date, дата, operationdate).</div>';
+    console.log("=== Сезонность: начальный analysisData ===");
+    console.log(analysisData);
+    console.log("seasonality внутри:", analysisData ? analysisData.seasonality : "нет analysisData");
+    
+    const s = analysisData?.seasonality || {};
+    
+    if (!s.has_data) {
+        console.log("Нет данных сезонности, has_data = false");
+        document.getElementById('seasonalityContent').innerHTML = '<div class="info"><i class="fas fa-chart-line"></i> Нет данных для анализа сезонности. Убедитесь, что в файле есть колонка с датами.</div>';
         showBlock('seasonalityBlock');
         return;
     }
+    
+    console.log("Данные сезонности есть:", s);
     let html = '<div class="seasonality-container">';
+    
     if(s.expense_by_month){
         const months = ['Янв','Фев','Мар','Апр','Май','Июн','Июл','Авг','Сен','Окт','Ноя','Дек'];
         const vals = months.map((_,i)=>s.expense_by_month[i+1]||0);
@@ -772,7 +775,8 @@ function showSeasonality() {
         });
         html += '</div></div>';
     }
-    if(s.by_weekday && Object.keys(s.by_weekday).length > 0){
+    
+    if(s.by_weekday){
         const days = ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
         const vals = days.map(d=>s.by_weekday[d]||0);
         const maxVal = Math.max(...vals,1);
@@ -789,6 +793,7 @@ function showSeasonality() {
         });
         html += '</div></div>';
     }
+    
     html += '</div>';
     document.getElementById('seasonalityContent').innerHTML = html;
     showBlock('seasonalityBlock');
