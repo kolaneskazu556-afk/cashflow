@@ -124,10 +124,11 @@ def analyze_statement(file_content: bytes, filename: str):
     df = parse_file(file_content, filename)
     df.columns = df.columns.str.lower().str.strip()
     
-    # Поддержка русских названий дат
+    # УМНЫЙ ПОИСК колонки с датами (ищет любое слово "дата" или "date")
     date_col = None
-    for col in ['date', 'operationdate', 'дата', 'дата операции', 'дата и время', 'transactiondate']:
-        if col in df.columns:
+    for col in df.columns:
+        col_lower = col.lower()
+        if 'дата' in col_lower or 'date' in col_lower:
             date_col = col
             break
     
@@ -139,8 +140,9 @@ def analyze_statement(file_content: bytes, filename: str):
             date_max = df[date_col].max()
             if pd.notna(date_min) and pd.notna(date_max):
                 days_count = (date_max - date_min).days + 1
-        except:
-            pass
+                print(f"📅 Найдена колонка дат: {date_col}, период: {date_min.date()} - {date_max.date()}")
+        except Exception as e:
+            print(f"Ошибка парсинга дат: {e}")
     
     incomes, expenses, expense_details = [], [], []
     for idx, row in df.iterrows():
@@ -725,9 +727,9 @@ function showCategories() {
         let table = '<h3><i class="fas fa-tags"></i> Расходы по категориям</h3>20table<th>Категория</th><th>Сумма (RUB)</th><tr>';
         for(const [cat,amt] of Object.entries(d.categories)){
             const icon = {'Аренда':'🏠','Сырьё и товары':'📦','Реклама':'📢','Налоги':'📄','Транспорт':'🚗','Продукты':'🍎','Кафе и рестораны':'🍽️','Образование':'📚','Прочее':'📌'}[cat] || '💰';
-            table += `<tr><td><span class="category-icon">${icon}</span> ${cat}</td>工作领导小组${amt.toFixed(2)} ₽</span></tr>`;
+            table += `<tr><td><span class="category-icon">${icon}</span> ${cat}</td>工作领导小组${amt.toFixed(2)} ₽</span></td>`;
         }
-        table += '<tr>';
+        table += '</table>';
         document.getElementById('categoriesContent').innerHTML = table;
         drawChart(d.categories);
     } else document.getElementById('categoriesContent').innerHTML = '<p><i class="fas fa-ban"></i> Нет данных для категоризации</p>';
