@@ -124,8 +124,9 @@ def analyze_statement(file_content: bytes, filename: str):
     df = parse_file(file_content, filename)
     df.columns = df.columns.str.lower().str.strip()
     
+    # Поддержка русских названий дат
     date_col = None
-    for col in ['date', 'operationdate']:
+    for col in ['date', 'operationdate', 'дата', 'дата операции', 'дата и время', 'transactiondate']:
         if col in df.columns:
             date_col = col
             break
@@ -187,8 +188,8 @@ def analyze_statement(file_content: bytes, filename: str):
                 weekday_names = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
                 for i, name in enumerate(weekday_names):
                     seasonality['by_weekday'][name] = abs(temp_df[temp_df['weekday'] == i]['amount'].sum())
-        except:
-            pass
+        except Exception as e:
+            print(f"Ошибка сезонности: {e}")
     
     last_analysis_result = {
         'income': float(total_income),
@@ -487,7 +488,6 @@ html_content = '''
         .bar-wrapper { height: 120px; display: flex; align-items: flex-end; justify-content: center; margin-bottom: 0.3rem; }
         .bar-fill { width: 30px; border-radius: 12px 12px 0 0; transition: height 0.6s ease-out; }
         .bar-value { font-size: 0.7rem; font-weight: bold; color: #f97316; }
-        /* Оранжевый дизайн для себестоимости */
         .cost-input-grid {
             display: flex;
             flex-direction: column;
@@ -722,12 +722,12 @@ function showTips() {
 function showCategories() {
     const d = analysisData;
     if(d.categories && Object.keys(d.categories).length){
-        let table = '<h3><i class="fas fa-tags"></i> Расходы по категориям</h3>20table<th>Категория</th><th>Сумма (RUB)</th></tr>';
+        let table = '<h3><i class="fas fa-tags"></i> Расходы по категориям</h3>20table<th>Категория</th><th>Сумма (RUB)</th><tr>';
         for(const [cat,amt] of Object.entries(d.categories)){
             const icon = {'Аренда':'🏠','Сырьё и товары':'📦','Реклама':'📢','Налоги':'📄','Транспорт':'🚗','Продукты':'🍎','Кафе и рестораны':'🍽️','Образование':'📚','Прочее':'📌'}[cat] || '💰';
-            table += `<tr><td><span class="category-icon">${icon}</span> ${cat}</td><td>${amt.toFixed(2)} ₽</td></tr>`;
+            table += `<tr><td><span class="category-icon">${icon}</span> ${cat}</td>工作领导小组${amt.toFixed(2)} ₽</span></tr>`;
         }
-        table += '</table>';
+        table += '<tr>';
         document.getElementById('categoriesContent').innerHTML = table;
         drawChart(d.categories);
     } else document.getElementById('categoriesContent').innerHTML = '<p><i class="fas fa-ban"></i> Нет данных для категоризации</p>';
@@ -739,7 +739,7 @@ function showTrend() { drawTrendChart(); showBlock('trendBlock'); }
 function showSeasonality() {
     const s = analysisData.seasonality || {};
     if(!s.has_data || !s.expense_by_month || Object.keys(s.expense_by_month).length === 0) {
-        document.getElementById('seasonalityContent').innerHTML = '<div class="info"><i class="fas fa-chart-line"></i> Нет данных для анализа сезонности. Загрузите файл с датами.</div>';
+        document.getElementById('seasonalityContent').innerHTML = '<div class="info"><i class="fas fa-chart-line"></i> Нет данных для анализа сезонности. Убедитесь, что в файле есть колонка с датами (date, дата, operationdate).</div>';
         showBlock('seasonalityBlock');
         return;
     }
