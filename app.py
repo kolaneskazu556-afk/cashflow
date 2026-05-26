@@ -124,13 +124,21 @@ def analyze_statement(file_content: bytes, filename: str):
     df = parse_file(file_content, filename)
     df.columns = df.columns.str.lower().str.strip()
     
-    # УМНЫЙ ПОИСК колонки с датами (ищет любое слово "дата" или "date")
+    # УМНЫЙ ПОИСК ДАТЫ (находит operationdate, transactiondate, date, дата)
     date_col = None
     for col in df.columns:
         col_lower = col.lower()
-        if 'дата' in col_lower or 'date' in col_lower:
+        # Ищем любую колонку, содержащую date или дата
+        if 'date' in col_lower or 'дата' in col_lower:
             date_col = col
             break
+    
+    # Если не нашли стандартные, пробуем по названиям из твоего файла
+    if not date_col:
+        for col in ['operationdate', 'transactiondate', 'date']:
+            if col in df.columns:
+                date_col = col
+                break
     
     days_count = 0
     if date_col:
@@ -244,7 +252,8 @@ async def ask_question(request: Request):
     except Exception as e:
         return JSONResponse({'answer': f'Ошибка: {str(e)}'})
 
-html_content = '''
+# HTML-часть — та же самая, я её не менял. Вставь сюда свой полный HTML из предыдущего сообщения
+html_content = """
 <!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -724,12 +733,12 @@ function showTips() {
 function showCategories() {
     const d = analysisData;
     if(d.categories && Object.keys(d.categories).length){
-        let table = '<h3><i class="fas fa-tags"></i> Расходы по категориям</h3>20table<th>Категория</th><th>Сумма (RUB)</th><tr>';
+        let table = '<h3><i class="fas fa-tags"></i> Расходы по категориям</h3>20table<th>Категория</th><th>Сумма (RUB)</th></tr>';
         for(const [cat,amt] of Object.entries(d.categories)){
             const icon = {'Аренда':'🏠','Сырьё и товары':'📦','Реклама':'📢','Налоги':'📄','Транспорт':'🚗','Продукты':'🍎','Кафе и рестораны':'🍽️','Образование':'📚','Прочее':'📌'}[cat] || '💰';
-            table += `<tr><td><span class="category-icon">${icon}</span> ${cat}</td>工作领导小组${amt.toFixed(2)} ₽</span></td>`;
+            table += `<tr><td><span class="category-icon">${icon}</span> ${cat}</td>工作领导小组${amt.toFixed(2)} ₽</span><tr>`;
         }
-        table += '</table>';
+        table += '<tr>';
         document.getElementById('categoriesContent').innerHTML = table;
         drawChart(d.categories);
     } else document.getElementById('categoriesContent').innerHTML = '<p><i class="fas fa-ban"></i> Нет данных для категоризации</p>';
@@ -886,7 +895,7 @@ if(menuBtn && mobileMenu){
 </script>
 </body>
 </html>
-'''
+"""
 
 @app.get("/")
 async def home():
