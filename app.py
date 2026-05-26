@@ -577,7 +577,7 @@ html_content = '''
                 <i class="fas fa-cloud-upload-alt"></i>
                 <p>Нажмите или перетащите файл</p>
                 <p style="font-size:0.7rem;opacity:0.7;">Поддерживаются: CSV, Excel, PDF</p>
-                <input type="file" id="fileInput" accept=".csv,.xlsx,.xls,.pdf">
+                <input type="file" id="fileInput" accept=".csv,.xlsx,.xls,.pdf" style="display: none;">
             </div>
             <div id="fileName" class="info" style="display:none;"></div>
             <div class="progress-container" id="progressContainer"><div class="progress-bar" id="progressBar"></div></div>
@@ -1060,7 +1060,7 @@ html_content = '''
                     const icon = {"Аренда":"🏠","Сырьё и товары":"📦","Реклама":"📢","Налоги":"📄","Транспорт":"🚗","Продукты":"🍎","Кафе и рестораны":"🍽️","Образование":"📚","Прочее":"📌"}[cat] || "💰";
                     table += "<tr><td><span class=\"category-icon\">"+icon+"</span> "+cat+"</td>ows以来"+amt.toFixed(2)+" ₽</span></tr>";
                 }
-                table += "</table>";
+                table += "</tr>";
                 document.getElementById("categoriesContent").innerHTML = table;
                 drawChart(d.categories);
             } else document.getElementById("categoriesContent").innerHTML = "<p><i class=\"fas fa-ban\"></i> Нет данных для категоризации</p>";
