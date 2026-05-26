@@ -583,6 +583,8 @@ html_content = '''
             <div class="progress-container" id="progressContainer"><div class="progress-bar" id="progressBar"></div></div>
             <button class="btn" id="analyzeBtn" onclick="uploadFile()" style="width:100%;margin-top:1rem;" disabled><i class="fas fa-chart-line"></i> Анализировать</button>
         </div>
+        <div id="skeletonLoader" style="display:none;"><div class="card"><div class="skeleton" style="height:200px;"></div></div></div>
+        <div class="loading" id="loading" style="display:none;text-align:center;padding:2rem;"><div class="spinner"></div><p>Анализирую выписку с помощью ИИ...</p></div>
         <div id="resultContainer" style="display:none;">
             <div class="card" id="suggestionCard"><h3><i class="fas fa-robot"></i> Анализ выполнен!</h3><div id="insightsContainer"></div><div id="suggestionButtons" class="suggestion-buttons"></div></div>
             <div id="fullReport" class="card" style="display:none;"><div id="reportContent"></div></div>
@@ -1049,7 +1051,7 @@ html_content = '''
                 let table = "<h3><i class=\"fas fa-tags\"></i> Расходы по категориям</h3>20table<th>Категория</th><th>Сумма (RUB)</th><tr>";
                 for(const [cat,amt] of Object.entries(d.categories)){
                     const icon = {"Аренда":"🏠","Сырьё и товары":"📦","Реклама":"📢","Налоги":"📄","Транспорт":"🚗","Продукты":"🍎","Кафе и рестораны":"🍽️","Образование":"📚","Прочее":"📌"}[cat] || "💰";
-                    table += "<tr><td><span class=\"category-icon\">"+icon+"</span> "+cat+"</td>ows<td>"+amt.toFixed(2)+" ₽</span></td></tr>";
+                    table += "<tr><td><span class=\"category-icon\">"+icon+"</span> "+cat+"</td><td>"+amt.toFixed(2)+" ₽</td></tr>";
                 }
                 table += "</table>";
                 document.getElementById("categoriesContent").innerHTML = table;
