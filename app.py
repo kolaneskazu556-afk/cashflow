@@ -964,7 +964,14 @@ html_content = '''
         function showSkeleton(show) { document.getElementById("skeletonLoader").style.display = show ? "block" : "none"; }
         const fileInput = document.getElementById("fileInput"), analyzeBtn = document.getElementById("analyzeBtn"), fileNameDiv = document.getElementById("fileName");
         const progressContainer = document.getElementById("progressContainer"), progressBar = document.getElementById("progressBar");
-        function handleFileSelect() { if(fileInput.files.length){ selectedFile = fileInput.files[0]; fileNameDiv.textContent = "Выбран файл: "+selectedFile.name; fileNameDiv.style.display = "block"; analyzeBtn.disabled = false; } }
+        function handleFileSelect() { 
+            if(fileInput.files.length){ 
+                selectedFile = fileInput.files[0]; 
+                fileNameDiv.textContent = "Выбран файл: "+selectedFile.name; 
+                fileNameDiv.style.display = "block"; 
+                analyzeBtn.disabled = false; 
+            } 
+        }
         const dropZone = document.querySelector(".upload-area");
         dropZone.ondragover = (e) => { e.preventDefault(); dropZone.style.borderColor = "#f97316"; };
         dropZone.ondragleave = () => dropZone.style.borderColor = "var(--border-color)";
@@ -1048,10 +1055,10 @@ html_content = '''
         function showCategories() {
             const d = analysisData;
             if(d.categories && Object.keys(d.categories).length){
-                let table = "<h3><i class=\"fas fa-tags\"></i> Расходы по категориям</h3>20table<th>Категория</th><th>Сумма (RUB)</th><tr>";
+                let table = "<h3><i class=\"fas fa-tags\"></i> Расходы по категориям</h3>20table<th>Категория</th><th>Сумма (RUB)</th></tr>";
                 for(const [cat,amt] of Object.entries(d.categories)){
                     const icon = {"Аренда":"🏠","Сырьё и товары":"📦","Реклама":"📢","Налоги":"📄","Транспорт":"🚗","Продукты":"🍎","Кафе и рестораны":"🍽️","Образование":"📚","Прочее":"📌"}[cat] || "💰";
-                    table += "<tr><td><span class=\"category-icon\">"+icon+"</span> "+cat+"</td><td>"+amt.toFixed(2)+" ₽</td></tr>";
+                    table += "<tr><td><span class=\"category-icon\">"+icon+"</span> "+cat+"</td>ows以来"+amt.toFixed(2)+" ₽</span></tr>";
                 }
                 table += "</table>";
                 document.getElementById("categoriesContent").innerHTML = table;
