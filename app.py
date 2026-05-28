@@ -1,11 +1,12 @@
 from fastapi import FastAPI, UploadFile, File, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from gigachat import GigaChat
 from dotenv import load_dotenv
 import pandas as pd
 import os
 import calendar
+import io
 from datetime import datetime
 from io import BytesIO
 
@@ -140,7 +141,6 @@ def analyze_statement(file_content: bytes, filename: str):
             date_max = df[date_col].max()
             if pd.notna(date_min) and pd.notna(date_max):
                 days_count = (date_max - date_min).days + 1
-                print(f"📅 Найдена колонка дат: {date_col}, период: {date_min.date()} - {date_max.date()}")
         except Exception as e:
             print(f"Ошибка парсинга дат: {e}")
     
@@ -159,6 +159,19 @@ def analyze_statement(file_content: bytes, filename: str):
     total_expense = sum(expenses)
     net_profit = total_income - total_expense
     
+    # Рентабельность
+    profitability = (net_profit / total_income * 100) if total_income > 0 else 0
+    
+    # Средний чек
+    avg_check = total_income / len(incomes) if incomes else 0
+    
+    # Анализ клиентов (топ-10 источников дохода)
+    client_analysis = {}
+    if 'merchant' in df.columns or 'description' in df.columns:
+        source_col = 'merchant' if 'merchant' in df.columns else 'description'
+        income_sources = df[df['amount'] > 0].groupby(source_col)['amount'].sum().sort_values(ascending=False).head(10)
+        client_analysis = income_sources.to_dict()
+    
     categories = {}
     if expense_details:
         expense_df = pd.DataFrame(expense_details).head(10)
@@ -174,7 +187,16 @@ def analyze_statement(file_content: bytes, filename: str):
     
     predicted_total, predicted_change, _ = predict_next_month(categories, total_expense, days_count)
     
-    # СЕЗОННОСТЬ
+    # Прогноз кассовых разрывов
+    cash_gap_warning = None
+    if net_profit < 0:
+        cash_gap_warning = f"⚠️ Расходы превышают доходы на {abs(net_profit):.2f} ₽. Рекомендуется сократить расходы или увеличить доходы."
+    elif predicted_total and total_income:
+        predicted_net = total_income - predicted_total
+        if predicted_net < 0:
+            cash_gap_warning = f"⚠️ По прогнозу, в следующем месяце ожидается убыток {abs(predicted_net):.2f} ₽. Возможен кассовый разрыв."
+    
+    # Сезонность
     seasonality = {'has_data': False}
     if date_col and len(df) > 0:
         try:
@@ -191,8 +213,6 @@ def analyze_statement(file_content: bytes, filename: str):
                 weekday_names = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
                 for i, name in enumerate(weekday_names):
                     seasonality['by_weekday'][name] = abs(temp_df[temp_df['weekday'] == i]['amount'].sum())
-                
-                print(f"📊 Сезонность: найдено {len(seasonality['expense_by_month'])} месяцев, {len(seasonality['by_weekday'])} дней")
         except Exception as e:
             print(f"Ошибка сезонности: {e}")
     
@@ -213,8 +233,30 @@ def analyze_statement(file_content: bytes, filename: str):
         'rows_count': len(df),
         'predicted_total': float(predicted_total) if predicted_total else None,
         'predicted_change': float(predicted_change) if predicted_change else None,
-        'seasonality': seasonality
+        'seasonality': seasonality,
+        'profitability': round(profitability, 1),
+        'avg_check': round(avg_check, 2),
+        'client_analysis': client_analysis,
+        'cash_gap_warning': cash_gap_warning
     }
+
+@app.get("/download-template")
+async def download_template():
+    """Скачивание шаблона CSV"""
+    content = """date,description,amount,type
+2025-04-01,Оплата от клиента,50000,пополнение
+2025-04-02,Аренда офиса,-15000,списание
+2025-04-03,Покупка продуктов,-8000,списание
+2025-04-04,Оплата от клиента,30000,пополнение
+2025-04-05,Реклама,-5000,списание
+2025-04-06,Налог,-4000,списание
+2025-04-07,Закуп сырья,-12000,списание"""
+    
+    return StreamingResponse(
+        io.BytesIO(content.encode('utf-8')),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=cashflow_template.csv"}
+    )
 
 @app.post("/ask")
 async def ask_question(request: Request):
@@ -582,7 +624,10 @@ html_content = """
         </div>
         <div id="fileName" class="info" style="display:none;"></div>
         <div class="progress-container" id="progressContainer"><div class="progress-bar" id="progressBar"></div></div>
-        <button class="btn" id="analyzeBtn" onclick="uploadFile()" style="width:100%;margin-top:1rem;" disabled><i class="fas fa-chart-line"></i> Анализировать</button>
+        <div style="display: flex; gap: 10px; margin-top: 1rem;">
+            <button class="btn" id="analyzeBtn" onclick="uploadFile()" disabled style="flex: 1;">📊 Анализировать</button>
+            <button class="btn" onclick="downloadTemplate()" style="flex: 0; background: #2a2a2a; border: 1px solid #f97316;">📥 Шаблон CSV</button>
+        </div>
     </div>
     <div id="skeletonLoader" style="display:none;"><div class="card"><div class="skeleton" style="height:200px;"></div></div></div>
     <div class="loading" id="loading" style="display:none;text-align:center;padding:2rem;"><div class="spinner"></div><p>Анализирую выписку с помощью ИИ...</p></div>
@@ -634,6 +679,10 @@ dropZone.ondrop = (e) => {
         handleFileSelect(); 
     } 
 };
+
+function downloadTemplate() {
+    window.location.href = '/download-template';
+}
 
 async function uploadFile() {
     if(!selectedFile) return;
@@ -689,10 +738,12 @@ function showSmartSuggestions(data) {
         { key:'trend', text:'📈 Динамика', func:showTrend, title:'График изменения доходов и расходов' },
         { key:'seasonality', text:'📅 Сезонность', func:showSeasonality, title:'Анализ трат по месяцам и дням недели' },
         { key:'cost', text:'💰 Себестоимость', func:showCost, title:'Расчёт себестоимости товара' },
+        { key:'clients', text:'👥 Анализ клиентов', func:showClientAnalysis, title:'Откуда приходят деньги' },
+        { key:'cashgap', text:'⚠️ Кассовые разрывы', func:showCashGap, title:'Прогноз возможных разрывов' },
         { key:'chat', text:'💬 Чат', func:showChat, title:'Задать вопрос ИИ о финансах' }
     ];
     let buttonsHtml = '';
-    for(let btn of allButtons) buttonsHtml += `<button class="suggestion-btn" onclick="${btn.func.name}()" title="${btn.title}"><i class="fas ${btn.key==='full'?'fa-chart-simple':btn.key==='forecast'?'fa-calendar-week':btn.key==='savings'?'fa-lightbulb':btn.key==='categories'?'fa-tags':btn.key==='trend'?'fa-chart-line':btn.key==='seasonality'?'fa-chart-gantt':btn.key==='cost'?'fa-calculator':'fa-comments'}"></i> ${btn.text}</button>`;
+    for(let btn of allButtons) buttonsHtml += `<button class="suggestion-btn" onclick="${btn.func.name}()" title="${btn.title}"><i class="fas ${btn.key==='full'?'fa-chart-simple':btn.key==='forecast'?'fa-calendar-week':btn.key==='savings'?'fa-lightbulb':btn.key==='categories'?'fa-tags':btn.key==='trend'?'fa-chart-line':btn.key==='seasonality'?'fa-chart-gantt':btn.key==='cost'?'fa-calculator':btn.key==='clients'?'fa-users':btn.key==='cashgap'?'fa-exclamation-triangle':'fa-comments'}"></i> ${btn.text}</button>`;
     document.getElementById('suggestionButtons').innerHTML = buttonsHtml;
     document.getElementById('resultContainer').style.display = 'block';
     if(window.innerWidth<=768 && mobileMenu) mobileMenu.style.display = 'none';
@@ -701,7 +752,21 @@ function showSmartSuggestions(data) {
 function showFullReport() {
     const d = analysisData;
     const profitClass = d.net_profit >= 0 ? 'profit-positive' : 'profit-negative';
-    document.getElementById('reportContent').innerHTML = `<h3><i class="fas fa-chart-simple"></i> Отчёт CashFlow</h3><div class="result-stats"><div class="stat-card income"><div class="value">${d.income.toFixed(2)} ₽</div><div class="label">Доходы</div></div><div class="stat-card expense"><div class="value">${d.expense.toFixed(2)} ₽</div><div class="label">Расходы</div></div><div class="stat-card ${profitClass}"><div class="value">${d.net_profit>=0?'+':''}${d.net_profit.toFixed(2)} ₽</div><div class="label">Чистая прибыль</div></div></div><div class="info"><i class="fas fa-info-circle"></i> Обработано строк: ${d.rows_count}<br><i class="fas fa-arrow-up"></i> Доходов: ${d.incomes_count}, <i class="fas fa-arrow-down"></i> Расходов: ${d.expenses_count}</div>`;
+    const profitabilityColor = d.profitability >= 0 ? '#10b981' : '#ef4444';
+    document.getElementById('reportContent').innerHTML = `
+        <h3><i class="fas fa-chart-simple"></i> Отчёт CashFlow</h3>
+        <div class="result-stats">
+            <div class="stat-card income"><div class="value">${d.income.toFixed(2)} ₽</div><div class="label">💰 Доходы</div></div>
+            <div class="stat-card expense"><div class="value">${d.expense.toFixed(2)} ₽</div><div class="label">💸 Расходы</div></div>
+            <div class="stat-card ${profitClass}"><div class="value">${d.net_profit>=0?'+':''}${d.net_profit.toFixed(2)} ₽</div><div class="label">✅ Чистая прибыль</div></div>
+        </div>
+        <div class="result-stats">
+            <div class="stat-card"><div class="value" style="color:${profitabilityColor};">${d.profitability}%</div><div class="label">📈 Рентабельность</div></div>
+            <div class="stat-card"><div class="value">${d.avg_check.toFixed(2)} ₽</div><div class="label">💰 Средний чек</div></div>
+        </div>
+        <div class="info"><i class="fas fa-info-circle"></i> Обработано строк: ${d.rows_count}<br><i class="fas fa-arrow-up"></i> Доходов: ${d.incomes_count}, <i class="fas fa-arrow-down"></i> Расходов: ${d.expenses_count}</div>
+        ${d.cash_gap_warning ? `<div class="info" style="background: rgba(239,68,68,0.2); color: #ef4444;"><i class="fas fa-exclamation-triangle"></i> ${d.cash_gap_warning}</div>` : ''}
+    `;
     showBlock('fullReport');
 }
 
@@ -727,10 +792,10 @@ function showTips() {
 function showCategories() {
     const d = analysisData;
     if(d.categories && Object.keys(d.categories).length){
-        let table = '<h3><i class="fas fa-tags"></i> Расходы по категориям</h3>20table<th>Категория</th><th>Сумма (RUB)</th><tr>';
+        let table = '<h3><i class="fas fa-tags"></i> Расходы по категориям</h3>20table<th>Категория</th><th>Сумма (RUB)</th></tr>';
         for(const [cat,amt] of Object.entries(d.categories)){
             const icon = {'Аренда':'🏠','Сырьё и товары':'📦','Реклама':'📢','Налоги':'📄','Транспорт':'🚗','Продукты':'🍎','Кафе и рестораны':'🍽️','Образование':'📚','Прочее':'📌'}[cat] || '💰';
-            table += `<tr><td><span class="category-icon">${icon}</span> ${cat}</td>工作领导小组${amt.toFixed(2)} ₽</span></tr>`;
+            table += `<tr><td><span class="category-icon">${icon}</span> ${cat}</td><td>${amt.toFixed(2)} ₽</td></tr>`;
         }
         table += '</table>';
         document.getElementById('categoriesContent').innerHTML = table;
@@ -742,30 +807,13 @@ function showCategories() {
 function showTrend() { drawTrendChart(); showBlock('trendBlock'); }
 
 function showSeasonality() {
-    console.log("=== Сезонность: начальный analysisData ===");
-    console.log(analysisData);
-    
-    const s = analysisData?.seasonality || {};
-    
-    // Если данных нет — показываем демо-данные для проверки
-    if (!s.has_data) {
-        console.log("Нет данных сезонности, показываем демо-данные");
-        const demoData = {
-            has_data: true,
-            expense_by_month: {3: 25077, 4: 20790, 5: 18000},
-            by_weekday: {Пн: 13535, Вт: 13888, Ср: 5566, Чт: 3685, Пт: 2149, Сб: 819, Вс: 6226}
-        };
-        renderSeasonality(demoData);
+    const s = analysisData.seasonality || {};
+    if(!s.has_data || !s.expense_by_month || Object.keys(s.expense_by_month).length === 0) {
+        document.getElementById('seasonalityContent').innerHTML = '<div class="info"><i class="fas fa-chart-line"></i> Нет данных для анализа сезонности. Убедитесь, что в файле есть колонка с датами.</div>';
+        showBlock('seasonalityBlock');
         return;
     }
-    
-    console.log("Данные сезонности есть:", s);
-    renderSeasonality(s);
-}
-
-function renderSeasonality(s) {
     let html = '<div class="seasonality-container">';
-    
     if(s.expense_by_month){
         const months = ['Янв','Фев','Мар','Апр','Май','Июн','Июл','Авг','Сен','Окт','Ноя','Дек'];
         const vals = months.map((_,i)=>s.expense_by_month[i+1]||0);
@@ -783,7 +831,6 @@ function renderSeasonality(s) {
         });
         html += '</div></div>';
     }
-    
     if(s.by_weekday){
         const days = ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
         const vals = days.map(d=>s.by_weekday[d]||0);
@@ -801,7 +848,6 @@ function renderSeasonality(s) {
         });
         html += '</div></div>';
     }
-    
     html += '</div>';
     document.getElementById('seasonalityContent').innerHTML = html;
     showBlock('seasonalityBlock');
@@ -809,6 +855,48 @@ function renderSeasonality(s) {
 
 function showCost() { showBlock('costBlock'); }
 function showChat() { showBlock('chatBlock'); }
+
+function showClientAnalysis() {
+    const d = analysisData;
+    const clients = d.client_analysis || {};
+    if (Object.keys(clients).length === 0) {
+        document.getElementById('categoriesContent').innerHTML = '<p>Нет данных для анализа клиентов</p>';
+        showBlock('categoriesBlock');
+        return;
+    }
+    let table = '<h3><i class="fas fa-users"></i> Анализ клиентов (источники дохода)</h3>20table<th>Источник</th><th>Сумма (RUB)</th></tr>';
+    for (const [source, amount] of Object.entries(clients)) {
+        const shortSource = source.length > 40 ? source.substring(0, 37) + '...' : source;
+        table += `<tr><td title="${escapeHtml(source)}">${escapeHtml(shortSource)}</td><td>${amount.toFixed(2)} ₽</td></tr>`;
+    }
+    table += '</table>';
+    document.getElementById('categoriesContent').innerHTML = table;
+    showBlock('categoriesBlock');
+}
+
+function showCashGap() {
+    const d = analysisData;
+    if (!d.cash_gap_warning) {
+        document.getElementById('seasonalityContent').innerHTML = '<div class="info"><i class="fas fa-check-circle"></i> Прогноз кассовых разрывов: всё стабильно.</div>';
+        showBlock('seasonalityBlock');
+        return;
+    }
+    document.getElementById('seasonalityContent').innerHTML = `
+        <div class="forecast-box" style="background: rgba(239,68,68,0.2); border-left-color: #ef4444;">
+            <h3><i class="fas fa-exclamation-triangle"></i> Предупреждение о кассовом разрыве</h3>
+            <p>${escapeHtml(d.cash_gap_warning)}</p>
+        </div>
+        <div class="info">
+            <i class="fas fa-lightbulb"></i> Рекомендации:
+            <ul style="margin-top: 8px; margin-left: 20px;">
+                <li>Сократите необязательные расходы в ближайший месяц</li>
+                <li>Увеличьте доходы (акции, доп. услуги)</li>
+                <li>Создайте резервный фонд (хотя бы 10% от доходов)</li>
+            </ul>
+        </div>
+    `;
+    showBlock('seasonalityBlock');
+}
 
 function showBlock(id) {
     const blocks = ['fullReport','forecastBlock','tipsBlock','categoriesBlock','trendBlock','seasonalityBlock','costBlock','chatBlock'];
@@ -900,9 +988,9 @@ function escapeHtml(t){ const d=document.createElement('div'); d.textContent=t; 
 const menuBtn=document.getElementById('menuBtn'), mobileMenu=document.getElementById('mobileMenu');
 if(menuBtn && mobileMenu){
     menuBtn.onclick=()=>{ mobileMenu.style.display=mobileMenu.style.display==='none'?'block':'none'; };
-    const items=['Загрузить','Отчёт','Прогноз','Советы','Категории','Динамика','Сезонность','Себестоимость','Чат'];
+    const items=['Загрузить','Отчёт','Прогноз','Советы','Категории','Динамика','Сезонность','Себестоимость','Клиенты','Кассовые разрывы','Чат'];
     let html='';
-    for(let i of items) html+=`<a href="#" onclick="if(analysisData){ if('${i}'==='Загрузить') document.querySelector('.upload-area').click(); else if('${i}'==='Отчёт') showFullReport(); else if('${i}'==='Прогноз') showForecast(); else if('${i}'==='Советы') showTips(); else if('${i}'==='Категории') showCategories(); else if('${i}'==='Динамика') showTrend(); else if('${i}'==='Сезонность') showSeasonality(); else if('${i}'==='Себестоимость') showCost(); else if('${i}'==='Чат') showChat(); } else if('${i}'==='Загрузить') document.querySelector('.upload-area').click(); document.getElementById('mobileMenu').style.display='none';">${i}</a>`;
+    for(let i of items) html+=`<a href="#" onclick="if(analysisData){ if('${i}'==='Загрузить') document.querySelector('.upload-area').click(); else if('${i}'==='Отчёт') showFullReport(); else if('${i}'==='Прогноз') showForecast(); else if('${i}'==='Советы') showTips(); else if('${i}'==='Категории') showCategories(); else if('${i}'==='Динамика') showTrend(); else if('${i}'==='Сезонность') showSeasonality(); else if('${i}'==='Себестоимость') showCost(); else if('${i}'==='Клиенты') showClientAnalysis(); else if('${i}'==='Кассовые разрывы') showCashGap(); else if('${i}'==='Чат') showChat(); } else if('${i}'==='Загрузить') document.querySelector('.upload-area').click(); document.getElementById('mobileMenu').style.display='none';">${i}</a>`;
     mobileMenu.innerHTML=html;
 }
 </script>
