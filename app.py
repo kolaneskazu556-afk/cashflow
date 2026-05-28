@@ -162,7 +162,7 @@ def analyze_statement(file_content: bytes, filename: str):
     total_income = sum(incomes)
     total_expense = sum(expenses)
     net_profit = total_income - total_expense
-    print(f"💰 Доходы: {total_income:.2f}, Расходы: {total_expense:.2f}")
+    print(f"💰 Доходы: {total_income:.2f}, Расходы: {total_expense:.2f}, Строк: {len(df)}")
     
     # Рентабельность
     profitability = (net_profit / total_income * 100) if total_income > 0 else 0
@@ -176,6 +176,7 @@ def analyze_statement(file_content: bytes, filename: str):
         source_col = 'merchant' if 'merchant' in df.columns else 'description'
         income_sources = df[df['amount'] > 0].groupby(source_col)['amount'].sum().sort_values(ascending=False).head(10)
         client_analysis = income_sources.to_dict()
+        print(f"👥 Найдено {len(client_analysis)} источников дохода")
     
     categories = {}
     if expense_details:
@@ -183,6 +184,7 @@ def analyze_statement(file_content: bytes, filename: str):
         expense_df['category'] = expense_df['description'].apply(ai_categorize)
         for cat, amt in expense_df.groupby('category')['amount'].sum().items():
             categories[category_names.get(cat, cat)] = float(amt)
+        print(f"📂 Категории: {list(categories.keys())}")
     
     tips = ""
     if categories and total_expense > 0:
@@ -201,26 +203,29 @@ def analyze_statement(file_content: bytes, filename: str):
         if predicted_net < 0:
             cash_gap_warning = f"⚠️ По прогнозу, в следующем месяце ожидается убыток {abs(predicted_net):.2f} ₽. Возможен кассовый разрыв."
     
-    # Сезонность
-    seasonality = {'has_data': False}
+    # СЕЗОННОСТЬ — РЕАЛЬНЫЕ ДАННЫЕ
+    seasonality = {'has_data': False, 'expense_by_month': {}, 'by_weekday': {}}
     if date_col and len(df) > 0:
         try:
+            # Берём только расходы (отрицательные суммы)
             temp_df = df[df['amount'] < 0].copy()
             if len(temp_df) > 0:
                 seasonality['has_data'] = True
-                seasonality['expense_by_month'] = {}
                 temp_df['month'] = pd.to_datetime(temp_df[date_col]).dt.month
                 for month in range(1, 13):
                     seasonality['expense_by_month'][month] = abs(temp_df[temp_df['month'] == month]['amount'].sum())
                 
-                seasonality['by_weekday'] = {}
                 temp_df['weekday'] = pd.to_datetime(temp_df[date_col]).dt.weekday
                 weekday_names = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
                 for i, name in enumerate(weekday_names):
                     seasonality['by_weekday'][name] = abs(temp_df[temp_df['weekday'] == i]['amount'].sum())
-                print(f"📊 Сезонность: данные найдены")
+                print(f"📊 Сезонность: найдены реальные данные ({len(seasonality['expense_by_month'])} месяцев, {len(seasonality['by_weekday'])} дней)")
+            else:
+                print(f"⚠️ Нет расходов (отрицательных сумм) для анализа сезонности")
         except Exception as e:
             print(f"Ошибка сезонности: {e}")
+    else:
+        print(f"⚠️ Колонка с датами не найдена")
     
     last_analysis_result = {
         'income': float(total_income),
@@ -294,6 +299,8 @@ async def ask_question(request: Request):
     except Exception as e:
         return JSONResponse({'answer': f'Ошибка: {str(e)}'})
 
+# HTML-код (такой же как в предыдущей версии, но сокращён для экономии места)
+# Полный HTML с кнопками и всеми функциями
 html_content = """
 <!DOCTYPE html>
 <html lang="ru">
@@ -829,25 +836,31 @@ function showSeasonality() {
     
     const s = analysisData?.seasonality || {};
     
-    if (!s.has_data || !s.expense_by_month || Object.keys(s.expense_by_month).length === 0) {
-        console.log("Нет данных сезонности, показываем демо-данные");
-        const demoData = {
-            has_data: true,
-            expense_by_month: {3: 25077, 4: 20790, 5: 18000},
-            by_weekday: {Пн: 13535, Вт: 13888, Ср: 5566, Чт: 3685, Пт: 2149, Сб: 819, Вс: 6226}
-        };
-        renderSeasonality(demoData);
+    // Проверяем, есть ли реальные данные
+    if (s.has_data && s.expense_by_month && Object.keys(s.expense_by_month).length > 0) {
+        console.log("✅ Показываем реальные данные сезонности:", s);
+        renderSeasonality(s);
         return;
     }
     
-    console.log("Данные сезонности есть:", s);
-    renderSeasonality(s);
+    // Если реальных данных нет, показываем сообщение с инструкцией
+    document.getElementById('seasonalityContent').innerHTML = `
+        <div class="info">
+            <i class="fas fa-chart-line"></i> 
+            <strong>Нет данных для анализа сезонности</strong><br><br>
+            Для анализа сезонности необходимы:<br>
+            1. Колонка с датами (названия: date, operationdate, дата, transactiondate)<br>
+            2. Колонка с суммами расходов (отрицательные числа в колонке amount)<br><br>
+            <i class="fas fa-lightbulb"></i> Совет: скачайте шаблон CSV (кнопка "📥 Шаблон CSV") и заполните его своими данными.
+        </div>
+    `;
+    showBlock('seasonalityBlock');
 }
 
 function renderSeasonality(s) {
     let html = '<div class="seasonality-container">';
     
-    if(s.expense_by_month){
+    if(s.expense_by_month && Object.keys(s.expense_by_month).length > 0){
         const months = ['Янв','Фев','Мар','Апр','Май','Июн','Июл','Авг','Сен','Окт','Ноя','Дек'];
         const vals = months.map((_,i)=>s.expense_by_month[i+1]||0);
         const maxVal = Math.max(...vals,1);
@@ -865,7 +878,7 @@ function renderSeasonality(s) {
         html += '</div></div>';
     }
     
-    if(s.by_weekday){
+    if(s.by_weekday && Object.keys(s.by_weekday).length > 0){
         const days = ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
         const vals = days.map(d=>s.by_weekday[d]||0);
         const maxVal = Math.max(...vals,1);
@@ -899,7 +912,7 @@ function showClientAnalysis() {
         showBlock('categoriesBlock');
         return;
     }
-    let table = '<h3><i class="fas fa-users"></i> Анализ клиентов (источники дохода)</h3>20table<th>Источник</th><th>Сумма (RUB)</th></table>';
+    let table = '<h3><i class="fas fa-users"></i> Анализ клиентов (источники дохода)</h3>20table<th>Источник</th><th>Сумма (RUB)</th><tr>';
     for (const [source, amount] of Object.entries(clients)) {
         const shortSource = source.length > 40 ? source.substring(0, 37) + '...' : source;
         table += `<tr><td title="${escapeHtml(source)}">${escapeHtml(shortSource)}</td><td>${amount.toFixed(2)} ₽</td></tr>`;
