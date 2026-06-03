@@ -503,98 +503,6 @@ async def get_budgets():
     budgets = get_budget_limits()
     return JSONResponse(budgets)
 
-@app.get("/export-pdf")
-async def export_pdf():
-    global last_analysis_result
-    if not last_analysis_result:
-        return JSONResponse({'error': 'Нет данных для экспорта'}, status_code=400)
-    
-    buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=A4)
-    styles = getSampleStyleSheet()
-    elements = []
-    
-    title_style = ParagraphStyle('CustomTitle', parent=styles['Title'], fontSize=24, textColor=colors.orange)
-    elements.append(Paragraph("CashFlow - Финансовый отчёт", title_style))
-    elements.append(Spacer(1, 20))
-    
-    data = [
-        ['Показатель', 'Сумма (₽)'],
-        ['Доходы', f"{last_analysis_result['income']:.2f}"],
-        ['Расходы', f"{last_analysis_result['expense']:.2f}"],
-        ['Чистая прибыль', f"{last_analysis_result['net_profit']:.2f}"],
-        ['Рентабельность', f"{last_analysis_result.get('profitability', 0)}%"],
-        ['Средний чек', f"{last_analysis_result.get('avg_check', 0):.2f} ₽"]
-    ]
-    
-    table = Table(data)
-    table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.orange),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-        ('GRID', (0, 0), (-1, -1), 1, colors.grey),
-    ]))
-    elements.append(table)
-    elements.append(Spacer(1, 20))
-    
-    if last_analysis_result.get('categories'):
-        elements.append(Paragraph("Расходы по категориям", styles['Heading2']))
-        elements.append(Spacer(1, 10))
-        cat_data = [['Категория', 'Сумма (₽)']]
-        for cat, amt in last_analysis_result['categories'].items():
-            cat_data.append([cat, f"{amt:.2f}"])
-        cat_table = Table(cat_data)
-        cat_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.orange),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('GRID', (0, 0), (-1, -1), 1, colors.grey),
-        ]))
-        elements.append(cat_table)
-    
-    doc.build(elements)
-    buffer.seek(0)
-    
-    return StreamingResponse(
-        buffer,
-        media_type="application/pdf",
-        headers={"Content-Disposition": "attachment; filename=cashflow_report.pdf"}
-    )
-
-@app.get("/export-excel")
-async def export_excel():
-    global last_analysis_result
-    if not last_analysis_result:
-        return JSONResponse({'error': 'Нет данных для экспорта'}, status_code=400)
-    
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        summary_df = pd.DataFrame([
-            ['Доходы', last_analysis_result['income']],
-            ['Расходы', last_analysis_result['expense']],
-            ['Чистая прибыль', last_analysis_result['net_profit']],
-            ['Рентабельность', f"{last_analysis_result.get('profitability', 0)}%"],
-            ['Средний чек', last_analysis_result.get('avg_check', 0)]
-        ], columns=['Показатель', 'Значение'])
-        summary_df.to_excel(writer, sheet_name='Основное', index=False)
-        
-        if last_analysis_result.get('categories'):
-            cat_df = pd.DataFrame([
-                [cat, amt] for cat, amt in last_analysis_result['categories'].items()
-            ], columns=['Категория', 'Сумма'])
-            cat_df.to_excel(writer, sheet_name='Категории', index=False)
-        
-        if last_analysis_result.get('forecast_3months'):
-            forecast_df = pd.DataFrame(last_analysis_result['forecast_3months'])
-            forecast_df.to_excel(writer, sheet_name='Прогноз', index=False)
-    
-    output.seek(0)
-    return StreamingResponse(
-        output,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": "attachment; filename=cashflow_report.xlsx"}
-    )
-
 @app.get("/monthly-comparison")
 async def get_monthly_comparison():
     global last_analysis_result
@@ -621,23 +529,6 @@ async def get_cash_gap_forecast():
         'cash_gaps': cash_gaps,
         'has_warning': len(cash_gaps) > 0
     })
-
-@app.get("/download-template")
-async def download_template():
-    content = """date,description,amount,type
-2025-04-01,Оплата от клиента,50000,пополнение
-2025-04-02,Аренда офиса,-15000,списание
-2025-04-03,Покупка продуктов,-8000,списание
-2025-04-04,Оплата от клиента,30000,пополнение
-2025-04-05,Реклама,-5000,списание
-2025-04-06,Налог,-4000,списание
-2025-04-07,Закуп сырья,-12000,списание"""
-    
-    return StreamingResponse(
-        io.BytesIO(content.encode('utf-8')),
-        media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=cashflow_template.csv"}
-    )
 
 @app.post("/ask")
 async def ask_question(request: Request):
@@ -674,10 +565,7 @@ async def ask_question(request: Request):
     except Exception as e:
         return JSONResponse({'answer': f'❌ Ошибка GigaChat: {str(e)}'})
 
-# ============ HTML СТАРЫЙ ПОЛНЫЙ ДИЗАЙН ============
-# (для краткости - полный HTML из предыдущей версии с карточками, анимациями, мобильным меню)
-# Я сократил здесь для читаемости сообщения, но он полностью идентичен вашему старому рабочему дизайну
-
+# ============ HTML ============
 html_content = """
 <!DOCTYPE html>
 <html lang="ru">
@@ -1070,7 +958,6 @@ html_content = """
         <div class="progress-container" id="progressContainer"><div class="progress-bar" id="progressBar"></div></div>
         <div style="display: flex; gap: 10px; margin-top: 1rem;">
             <button class="btn" id="analyzeBtn" onclick="uploadFile()" disabled style="flex: 1;">📊 Анализировать</button>
-            <button class="btn" onclick="downloadTemplate()" style="flex: 0; background: #2a2a2a; border: 1px solid #f97316;">📥 Шаблон CSV</button>
         </div>
     </div>
     <div id="loading" style="display:none;text-align:center;padding:2rem;"><div class="spinner"></div><p>Анализирую выписку с помощью ИИ...</p></div>
@@ -1142,10 +1029,6 @@ dropZone.ondrop = (e) => {
     } 
 };
 
-function downloadTemplate() {
-    window.location.href = '/download-template';
-}
-
 async function uploadFile() {
     if(!selectedFile) return;
     
@@ -1197,8 +1080,6 @@ function showSmartSuggestions(data) {
         { key:'clients', text:'👥 Анализ клиентов', func:showClientAnalysis },
         { key:'budget', text:'💰 Бюджет', func:showBudget },
         { key:'history', text:'📜 История', func:showHistory },
-        { key:'exportPDF', text:'📄 Экспорт PDF', func:exportPDF },
-        { key:'exportExcel', text:'📊 Экспорт Excel', func:exportExcel },
         { key:'chat', text:'💬 Чат', func:showChat }
     ];
     let buttonsHtml = '';
@@ -1454,8 +1335,6 @@ async function loadHistoryItem(id) {
     alert('Загружен анализ от ' + data.date);
 }
 
-function exportPDF() { window.open('/export-pdf', '_blank'); }
-function exportExcel() { window.open('/export-excel', '_blank'); }
 function showChat() { showBlock('chatBlock'); }
 
 async function askQuestion() {
@@ -1532,9 +1411,9 @@ function escapeHtml(t){ const d=document.createElement('div'); d.textContent=t; 
 const menuBtn=document.getElementById('menuBtn'), mobileMenu=document.getElementById('mobileMenu');
 if(menuBtn && mobileMenu){
     menuBtn.onclick=()=>{ mobileMenu.style.display=mobileMenu.style.display==='none'?'block':'none'; };
-    const items=['Загрузить','Отчёт','Сравнение','Прогноз','Советы','Категории','Динамика','Сезонность','Себестоимость','Клиенты','Бюджет','История','Экспорт PDF','Экспорт Excel','Чат'];
+    const items=['Загрузить','Отчёт','Сравнение','Прогноз','Советы','Категории','Динамика','Сезонность','Себестоимость','Клиенты','Бюджет','История','Чат'];
     let html='';
-    for(let i of items) html+=`<a href="#" onclick="if(analysisData){ if('${i}'==='Загрузить') document.querySelector('.upload-area').click(); else if('${i}'==='Отчёт') showFullReport(); else if('${i}'==='Сравнение') showComparison(); else if('${i}'==='Прогноз') showCashGapForecast(); else if('${i}'==='Советы') showTips(); else if('${i}'==='Категории') showCategories(); else if('${i}'==='Динамика') showTrend(); else if('${i}'==='Сезонность') showSeasonality(); else if('${i}'==='Себестоимость') showCost(); else if('${i}'==='Клиенты') showClientAnalysis(); else if('${i}'==='Бюджет') showBudget(); else if('${i}'==='История') showHistory(); else if('${i}'==='Экспорт PDF') exportPDF(); else if('${i}'==='Экспорт Excel') exportExcel(); else if('${i}'==='Чат') showChat(); } else if('${i}'==='Загрузить') document.querySelector('.upload-area').click(); document.getElementById('mobileMenu').style.display='none';">${i}</a>`;
+    for(let i of items) html+=`<a href="#" onclick="if(analysisData){ if('${i}'==='Загрузить') document.querySelector('.upload-area').click(); else if('${i}'==='Отчёт') showFullReport(); else if('${i}'==='Сравнение') showComparison(); else if('${i}'==='Прогноз') showCashGapForecast(); else if('${i}'==='Советы') showTips(); else if('${i}'==='Категории') showCategories(); else if('${i}'==='Динамика') showTrend(); else if('${i}'==='Сезонность') showSeasonality(); else if('${i}'==='Себестоимость') showCost(); else if('${i}'==='Клиенты') showClientAnalysis(); else if('${i}'==='Бюджет') showBudget(); else if('${i}'==='История') showHistory(); else if('${i}'==='Чат') showChat(); } else if('${i}'==='Загрузить') document.querySelector('.upload-area').click(); document.getElementById('mobileMenu').style.display='none';">${i}</a>`;
     mobileMenu.innerHTML=html;
 }
 </script>
