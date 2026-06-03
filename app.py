@@ -1177,7 +1177,7 @@ function showCategories() {
             const icon = {'Аренда':'🏠','Сырьё и товары':'📦','Реклама':'📢','Налоги':'📄','Транспорт':'🚗','Продукты':'🍎','Кафе и рестораны':'🍽️','Образование':'📚','Прочее':'📌'}[cat] || '💰';
             table += `<tr><td><span class="category-icon">${icon}</span> ${cat}</td><td style="text-align:right">${amt.toFixed(2)} ₽</td></tr>`;
         }
-        table += '</table>';
+        table += '</td>';
         document.getElementById('categoriesContent').innerHTML = table;
         const ctx = document.getElementById('expenseChart').getContext('2d');
         if(expenseChart) expenseChart.destroy();
@@ -1428,13 +1428,24 @@ async def home():
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
     try:
-        print(f"📁 Получен файл: {file.filename}")
+        # Очищаем имя файла от проблемных символов
+        clean_filename = file.filename.replace(' ', '_').replace('(', '').replace(')', '').replace('[', '').replace(']', '')
+        
+        print(f"📁 Получен файл: {file.filename} -> {clean_filename}")
         file_content = await file.read()
-        print(f"📄 Размер файла: {len(file_content)} байт")
+        
         if len(file_content) == 0:
             return JSONResponse({'error': 'Файл пуст'}, status_code=400)
+        
+        # Проверка расширения
+        if not file.filename.lower().endswith(('.csv', '.xlsx', '.xls')):
+            return JSONResponse({'error': 'Поддерживаются только CSV и Excel файлы'}, status_code=400)
+        
+        print(f"📄 Размер файла: {len(file_content)} байт")
+        
         result = analyze_statement(file_content, file.filename)
         return JSONResponse(result)
+        
     except Exception as e:
         print(f"❌ Ошибка: {e}")
         import traceback
