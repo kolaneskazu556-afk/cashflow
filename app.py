@@ -152,9 +152,10 @@ try:
             credentials=credentials,
             scope=os.getenv('GIGACHAT_SCOPE', 'GIGACHAT_API_PERS'),
             verify_ssl_certs=False,
-            model="GigaChat-Pro"
+            model="GigaChat-Pro",
+            is_personal=True  # <--- ЭТА СТРОЧКА ДЛЯ БЕСПЛАТНОГО ДОСТУПА
         )
-        print("✅ GigaChat подключен")
+        print("✅ GigaChat подключен (бесплатный режим)")
     else:
         print("⚠️ GIGACHAT_CREDENTIALS не найдена")
 except Exception as e:
@@ -547,6 +548,7 @@ async def ask_question(request: Request):
 Доходы: {last_analysis_result['income']:.2f} ₽
 Расходы: {last_analysis_result['expense']:.2f} ₽
 Чистая прибыль: {last_analysis_result['net_profit']:.2f} ₽
+Рентабельность: {last_analysis_result.get('profitability', 0)}%
 Расходы по категориям:
 """
     for cat, amount in last_analysis_result.get('categories', {}).items():
@@ -563,6 +565,9 @@ async def ask_question(request: Request):
         answer = response.choices[0].message.content
         return JSONResponse({'answer': answer})
     except Exception as e:
+        # Обработка ошибки 402 (нет денег)
+        if "402" in str(e) or "Payment Required" in str(e):
+            return JSONResponse({'answer': f'⚠️ У GigaChat закончились бесплатные токены или нужно обновить ключ. Ваш вопрос: "{question}"\n\nНо я могу ответить на основе ваших данных:\n{context}\n\nПожалуйста, проверьте API ключ в настройках Render.'})
         return JSONResponse({'answer': f'❌ Ошибка GigaChat: {str(e)}'})
 
 # ============ HTML ============
@@ -1177,7 +1182,7 @@ function showCategories() {
             const icon = {'Аренда':'🏠','Сырьё и товары':'📦','Реклама':'📢','Налоги':'📄','Транспорт':'🚗','Продукты':'🍎','Кафе и рестораны':'🍽️','Образование':'📚','Прочее':'📌'}[cat] || '💰';
             table += `<tr><td><span class="category-icon">${icon}</span> ${cat}</td><td style="text-align:right">${amt.toFixed(2)} ₽</td></tr>`;
         }
-        table += '</td>';
+        table += '</table>';
         document.getElementById('categoriesContent').innerHTML = table;
         const ctx = document.getElementById('expenseChart').getContext('2d');
         if(expenseChart) expenseChart.destroy();
