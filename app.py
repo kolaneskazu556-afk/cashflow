@@ -1,7 +1,7 @@
 from fastapi import FastAPI, UploadFile, File, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
-from gigachat import GigaChat
+from openai import OpenAI
 from dotenv import load_dotenv
 import pandas as pd
 import os
@@ -143,23 +143,20 @@ def check_budget_alerts(expenses_by_category):
                 })
     return alerts
 
-# ============ GIGACHAT ============
-giga = None
+# ============ DEEPSEEK ============
+deepseek_client = None
 try:
-    credentials = os.getenv('GIGACHAT_CREDENTIALS')
-    if credentials:
-        giga = GigaChat(
-            credentials=credentials,
-            scope=os.getenv('GIGACHAT_SCOPE', 'GIGACHAT_API_PERS'),
-            verify_ssl_certs=False,
-            model="GigaChat-Pro",
-            is_personal=True  # <--- ЭТА СТРОЧКА ДЛЯ БЕСПЛАТНОГО ДОСТУПА
+    api_key = os.getenv('DEEPSEEK_API_KEY')
+    if api_key:
+        deepseek_client = OpenAI(
+            api_key=api_key,
+            base_url="https://api.deepseek.com"
         )
-        print("✅ GigaChat подключен (бесплатный режим)")
+        print("✅ DeepSeek API подключен")
     else:
-        print("⚠️ GIGACHAT_CREDENTIALS не найдена")
+        print("⚠️ DEEPSEEK_API_KEY не найдена")
 except Exception as e:
-    print(f"❌ Ошибка GigaChat: {e}")
+    print(f"❌ Ошибка DeepSeek: {e}")
 
 last_analysis_result = None
 
@@ -176,7 +173,7 @@ category_names = {
 }
 
 def ai_categorize(description):
-    if giga is None or not description or description == 'nan':
+    if deepseek_client is None or not description or description == 'nan':
         return 'other'
     prompt = f"""
     Определи категорию расхода для операции: "{description}"
@@ -184,15 +181,21 @@ def ai_categorize(description):
     Ответь ТОЛЬКО одним словом из этих вариантов.
     """
     try:
-        response = giga.chat(prompt)
+        response = deepseek_client.chat.completions.create(
+            model="deepseek-chat",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.1,
+            max_tokens=20
+        )
         category = response.choices[0].message.content.strip().lower()
         return category if category in category_names else 'other'
     except:
         return 'other'
 
 def get_savings_tips(expenses_by_category, total_expense, top_expenses):
-    if giga is None or not expenses_by_category or total_expense == 0:
+    if deepseek_client is None or not expenses_by_category or total_expense == 0:
         return "• Загрузите выписку с расходами для получения персонализированных советов\n• Анализируйте самые большие категории расходов\n• Сравнивайте цены у разных поставщиков"
+    
     categories_text = "\n".join([f"- {cat}: {amount:.2f} руб." for cat, amount in list(expenses_by_category.items())[:5]])
     prompt = f"""Расходы микробизнеса за период:
 {categories_text}
@@ -201,7 +204,12 @@ def get_savings_tips(expenses_by_category, total_expense, top_expenses):
 Каждый совет начинай с новой строки и ставь в начале символ "•".
 Напиши 3 совета именно для этих расходов:"""
     try:
-        response = giga.chat(prompt)
+        response = deepseek_client.chat.completions.create(
+            model="deepseek-chat",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+            max_tokens=300
+        )
         tips = response.choices[0].message.content.strip()
         if tips and '•' in tips and len(tips) > 50:
             return tips
@@ -323,7 +331,6 @@ def analyze_statement(file_content: bytes, filename: str):
     tips = get_savings_tips(categories, total_expense, [])
     predicted_total, predicted_change, _ = predict_next_month(categories, total_expense, days_count)
     
-    # Прогноз на 3 месяца
     forecast_3months = []
     cash_gaps = []
     
@@ -375,7 +382,6 @@ def analyze_statement(file_content: bytes, filename: str):
                 'risk_text': risk_text
             })
     
-    # Сравнение с прошлым месяцем
     comparison = {'has_data': False}
     monthly_comparison = {}
     
@@ -540,8 +546,8 @@ async def ask_question(request: Request):
     if not last_analysis_result:
         return JSONResponse({'answer': 'Сначала загрузите и проанализируйте выписку'})
     
-    if giga is None:
-        return JSONResponse({'answer': '❌ GigaChat не подключен. Проверьте API ключ в настройках Render.'})
+    if deepseek_client is None:
+        return JSONResponse({'answer': '❌ DeepSeek не подключен. Проверьте API ключ в настройках Render.'})
     
     context = f"""
 Данные о финансах микробизнеса:
@@ -555,22 +561,49 @@ async def ask_question(request: Request):
         context += f"- {cat}: {amount:.2f} ₽\n"
     
     prompt = f"""
-Ты финансовый ассистент для микробизнеса. Вот данные о расходах:
-{context}
 Пользователь задаёт вопрос: "{question}"
+
+Вот данные о финансах:
+{context}
+
 Ответь коротко, конкретно и полезно. Используй цифры из данных.
 """
     try:
-        response = giga.chat(prompt)
+        response = deepseek_client.chat.completions.create(
+            model="deepseek-chat",
+            messages=[
+                {"role": "system", "content": "Ты финансовый ассистент для микробизнеса. Отвечай на русском, коротко и по делу. Используй цифры из данных."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.7,
+            max_tokens=500
+        )
         answer = response.choices[0].message.content
         return JSONResponse({'answer': answer})
     except Exception as e:
-        # Обработка ошибки 402 (нет денег)
-        if "402" in str(e) or "Payment Required" in str(e):
-            return JSONResponse({'answer': f'⚠️ У GigaChat закончились бесплатные токены или нужно обновить ключ. Ваш вопрос: "{question}"\n\nНо я могу ответить на основе ваших данных:\n{context}\n\nПожалуйста, проверьте API ключ в настройках Render.'})
-        return JSONResponse({'answer': f'❌ Ошибка GigaChat: {str(e)}'})
+        error_msg = str(e)
+        if "insufficient_quota" in error_msg.lower() or "billing" in error_msg.lower():
+            return JSONResponse({'answer': '⚠️ Закончились бесплатные токены DeepSeek. Пополните баланс или получите новый API-ключ.'})
+        return JSONResponse({'answer': f'❌ Ошибка DeepSeek: {error_msg}'})
 
-# ============ HTML ============
+@app.get("/download-template")
+async def download_template():
+    content = """date,description,amount,type
+2025-04-01,Оплата от клиента,50000,пополнение
+2025-04-02,Аренда офиса,-15000,списание
+2025-04-03,Покупка продуктов,-8000,списание
+2025-04-04,Оплата от клиента,30000,пополнение
+2025-04-05,Реклама,-5000,списание
+2025-04-06,Налог,-4000,списание
+2025-04-07,Закуп сырья,-12000,списание"""
+    
+    return StreamingResponse(
+        io.BytesIO(content.encode('utf-8')),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=cashflow_template.csv"}
+    )
+
+# ============ HTML (полный старый дизайн) ============
 html_content = """
 <!DOCTYPE html>
 <html lang="ru">
@@ -963,6 +996,7 @@ html_content = """
         <div class="progress-container" id="progressContainer"><div class="progress-bar" id="progressBar"></div></div>
         <div style="display: flex; gap: 10px; margin-top: 1rem;">
             <button class="btn" id="analyzeBtn" onclick="uploadFile()" disabled style="flex: 1;">📊 Анализировать</button>
+            <button class="btn" onclick="downloadTemplate()" style="flex: 0; background: #2a2a2a; border: 1px solid #f97316;">📥 Шаблон CSV</button>
         </div>
     </div>
     <div id="loading" style="display:none;text-align:center;padding:2rem;"><div class="spinner"></div><p>Анализирую выписку с помощью ИИ...</p></div>
@@ -1033,6 +1067,10 @@ dropZone.ondrop = (e) => {
         handleFileSelect(); 
     } 
 };
+
+function downloadTemplate() {
+    window.location.href = '/download-template';
+}
 
 async function uploadFile() {
     if(!selectedFile) return;
@@ -1180,7 +1218,7 @@ function showCategories() {
         let table = '<h3><i class="fas fa-tags"></i> Расходы по категориям</h3><table style="width:100%"><tr><th>Категория</th><th>Сумма (RUB)</th></tr>';
         for(const [cat,amt] of Object.entries(d.categories)){
             const icon = {'Аренда':'🏠','Сырьё и товары':'📦','Реклама':'📢','Налоги':'📄','Транспорт':'🚗','Продукты':'🍎','Кафе и рестораны':'🍽️','Образование':'📚','Прочее':'📌'}[cat] || '💰';
-            table += `<tr><td><span class="category-icon">${icon}</span> ${cat}</td><td style="text-align:right">${amt.toFixed(2)} ₽</td></tr>`;
+            table += `<tr><td><span class="category-icon">${icon}</span> ${cat}</td><td style="text-align:right">${amt.toFixed(2)} ₽</td></table>`;
         }
         table += '</table>';
         document.getElementById('categoriesContent').innerHTML = table;
