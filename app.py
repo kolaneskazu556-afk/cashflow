@@ -144,6 +144,7 @@ def check_budget_alerts(expenses_by_category):
     return alerts
 
 # ============ DEEPSEEK (ИСПРАВЛЕННАЯ ВЕРСИЯ - БЕЗ PROXIES) ============
+# ============ DEEPSEEK ============
 deepseek_client = None
 try:
     api_key = os.getenv('DEEPSEEK_API_KEY')
