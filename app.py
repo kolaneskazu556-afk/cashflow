@@ -602,8 +602,7 @@ async def download_template():
         io.BytesIO(content.encode('utf-8')),
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=cashflow_template.csv"}
-    )
-    html_content = """
+    )html_content = """
 <!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -1129,8 +1128,7 @@ function showSmartSuggestions(data) {
     document.getElementById('suggestionButtons').innerHTML = buttonsHtml;
     document.getElementById('resultContainer').style.display = 'block';
     if(window.innerWidth<=768 && mobileMenu) mobileMenu.style.display = 'none';
-}
-    function showFullReport() {
+}function showFullReport() {
     const d = analysisData;
     document.getElementById('reportContent').innerHTML = `
         <h3><i class="fas fa-chart-simple"></i> Отчёт CashFlow</h3>
@@ -1460,8 +1458,7 @@ if(menuBtn && mobileMenu){
 </script>
 </body>
 </html>
-"""
-    @app.get("/")
+"""@app.get("/")
 async def home():
     return HTMLResponse(html_content)
 
