@@ -143,7 +143,7 @@ def check_budget_alerts(expenses_by_category):
                 })
     return alerts
 
-# ============ DEEPSEEK ============
+# ============ DEEPSEEK (ИСПРАВЛЕННАЯ ВЕРСИЯ - БЕЗ PROXIES) ============
 deepseek_client = None
 try:
     api_key = os.getenv('DEEPSEEK_API_KEY')
@@ -189,7 +189,8 @@ def ai_categorize(description):
         )
         category = response.choices[0].message.content.strip().lower()
         return category if category in category_names else 'other'
-    except:
+    except Exception as e:
+        print(f"Ошибка категоризации: {e}")
         return 'other'
 
 def get_savings_tips(expenses_by_category, total_expense, top_expenses):
@@ -604,8 +605,7 @@ async def download_template():
     )
 
 # ============ HTML (полный старый дизайн) ============
-html_content = """
-<!DOCTYPE html>
+html_content = """<!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
@@ -1218,7 +1218,7 @@ function showCategories() {
         let table = '<h3><i class="fas fa-tags"></i> Расходы по категориям</h3><table style="width:100%"><tr><th>Категория</th><th>Сумма (RUB)</th></tr>';
         for(const [cat,amt] of Object.entries(d.categories)){
             const icon = {'Аренда':'🏠','Сырьё и товары':'📦','Реклама':'📢','Налоги':'📄','Транспорт':'🚗','Продукты':'🍎','Кафе и рестораны':'🍽️','Образование':'📚','Прочее':'📌'}[cat] || '💰';
-            table += `<tr><td><span class="category-icon">${icon}</span> ${cat}</td><td style="text-align:right">${amt.toFixed(2)} ₽</td></table>`;
+            table += `<tr><td><span class="category-icon">${icon}</span> ${cat}佛罗<td style="text-align:right">${amt.toFixed(2)} ₽</td></tr>`;
         }
         table += '</table>';
         document.getElementById('categoriesContent').innerHTML = table;
