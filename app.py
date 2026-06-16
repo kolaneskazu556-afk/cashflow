@@ -143,8 +143,7 @@ def check_budget_alerts(expenses_by_category):
                 })
     return alerts
 
-# ============ DEEPSEEK (ИСПРАВЛЕННАЯ ВЕРСИЯ - БЕЗ PROXIES) ============
-# ============ DEEPSEEK ============
+# ============ DEEPSEEK (РАБОЧАЯ ВЕРСИЯ - БЕЗ PROXIES) ============
 deepseek_client = None
 try:
     api_key = os.getenv('DEEPSEEK_API_KEY')
@@ -603,10 +602,8 @@ async def download_template():
         io.BytesIO(content.encode('utf-8')),
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=cashflow_template.csv"}
-    )
-
-# ============ HTML (полный старый дизайн) ============
-html_content = """<!DOCTYPE html>
+    )html_content = """
+<!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
@@ -1131,9 +1128,7 @@ function showSmartSuggestions(data) {
     document.getElementById('suggestionButtons').innerHTML = buttonsHtml;
     document.getElementById('resultContainer').style.display = 'block';
     if(window.innerWidth<=768 && mobileMenu) mobileMenu.style.display = 'none';
-}
-
-function showFullReport() {
+}function showFullReport() {
     const d = analysisData;
     document.getElementById('reportContent').innerHTML = `
         <h3><i class="fas fa-chart-simple"></i> Отчёт CashFlow</h3>
@@ -1219,7 +1214,7 @@ function showCategories() {
         let table = '<h3><i class="fas fa-tags"></i> Расходы по категориям</h3><table style="width:100%"><tr><th>Категория</th><th>Сумма (RUB)</th></tr>';
         for(const [cat,amt] of Object.entries(d.categories)){
             const icon = {'Аренда':'🏠','Сырьё и товары':'📦','Реклама':'📢','Налоги':'📄','Транспорт':'🚗','Продукты':'🍎','Кафе и рестораны':'🍽️','Образование':'📚','Прочее':'📌'}[cat] || '💰';
-            table += `<tr><td><span class="category-icon">${icon}</span> ${cat}佛罗<td style="text-align:right">${amt.toFixed(2)} ₽</td></tr>`;
+            table += `<tr><td><span class="category-icon">${icon}</span> ${cat}佛罗<td style="text-align:right">${amt.toFixed(2)} ₽</td></td>`;
         }
         table += '</table>';
         document.getElementById('categoriesContent').innerHTML = table;
@@ -1463,33 +1458,20 @@ if(menuBtn && mobileMenu){
 </script>
 </body>
 </html>
-"""
-
-@app.get("/")
+"""@app.get("/")
 async def home():
     return HTMLResponse(html_content)
 
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
     try:
-        # Очищаем имя файла от проблемных символов
-        clean_filename = file.filename.replace(' ', '_').replace('(', '').replace(')', '').replace('[', '').replace(']', '')
-        
-        print(f"📁 Получен файл: {file.filename} -> {clean_filename}")
+        print(f"📁 Получен файл: {file.filename}")
         file_content = await file.read()
-        
+        print(f"📄 Размер файла: {len(file_content)} байт")
         if len(file_content) == 0:
             return JSONResponse({'error': 'Файл пуст'}, status_code=400)
-        
-        # Проверка расширения
-        if not file.filename.lower().endswith(('.csv', '.xlsx', '.xls')):
-            return JSONResponse({'error': 'Поддерживаются только CSV и Excel файлы'}, status_code=400)
-        
-        print(f"📄 Размер файла: {len(file_content)} байт")
-        
         result = analyze_statement(file_content, file.filename)
         return JSONResponse(result)
-        
     except Exception as e:
         print(f"❌ Ошибка: {e}")
         import traceback
