@@ -64,7 +64,6 @@ def save_analysis_to_db(filename, result):
     conn = sqlite3.connect('cashflow_history.db')
     cursor = conn.cursor()
     
-    # Преобразуем все numpy типы в обычные Python
     def convert_to_python(obj):
         if isinstance(obj, dict):
             return {k: convert_to_python(v) for k, v in obj.items()}
@@ -157,7 +156,8 @@ def check_budget_alerts(expenses_by_category):
                     'message': f"⚠️ Лимит по категории '{category}' почти исчерпан: {spent:.2f} ₽ / {limit:.2f} ₽ ({round(spent/limit*100)}%)"
                 })
     return alerts
-    # ============ YANDEXGPT ============
+
+# ============ YANDEXGPT ============
 YANDEX_CLOUD_FOLDER = "b1g41a3v1qrmkt4rccos"
 YANDEX_CLOUD_API_KEY = os.getenv('YANDEX_API_KEY')
 
@@ -200,11 +200,8 @@ category_names = {
 }
 
 def ai_categorize(description):
-    """Категоризация без ИИ (fallback)"""
-    # Если нет YandexGPT, используем простую логику
     if not description or description == 'nan':
         return 'other'
-    # Простая категоризация по ключевым словам
     keywords = {
         'rent': ['аренда', 'офис', 'помещение'],
         'supplies': ['сырьё', 'товар', 'закуп', 'материал'],
@@ -228,7 +225,6 @@ def get_savings_tips(expenses_by_category, total_expense, top_expenses):
     
     categories_text = "\n".join([f"- {cat}: {amount:.2f} руб." for cat, amount in list(expenses_by_category.items())[:5]])
     
-    # Пробуем получить советы от YandexGPT
     if YANDEX_CLOUD_API_KEY:
         prompt = f"""Расходы микробизнеса за период:
 {categories_text}
@@ -505,7 +501,8 @@ def analyze_statement(file_content: bytes, filename: str):
     save_analysis_to_db(filename, result)
     
     return result
-    # ============ ЭНДПОИНТЫ ============
+
+# ============ ЭНДПОИНТЫ ============
 
 @app.get("/history")
 async def get_history():
@@ -597,26 +594,7 @@ async def ask_question(request: Request):
     else:
         return JSONResponse({'answer': '❌ Ошибка YandexGPT. Проверьте API ключ в настройках Render.'})
 
-@app.get("/download-template")
-async def download_template():
-    content = """date,description,amount,type
-2025-04-01,Оплата от клиента,50000,пополнение
-2025-04-02,Аренда офиса,-15000,списание
-2025-04-03,Покупка продуктов,-8000,списание
-2025-04-04,Оплата от клиента,30000,пополнение
-2025-04-05,Реклама,-5000,списание
-2025-04-06,Налог,-4000,списание
-2025-04-07,Закуп сырья,-12000,списание"""
-    
-    return StreamingResponse(
-        io.BytesIO(content.encode('utf-8')),
-        media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=cashflow_template.csv"}
-    )
-
-# ============ HTML (УПРОЩЁННАЯ ВЕРСИЯ) ============
-# Полный HTML-код здесь (я даю минимальную версию, чтобы код поместился)
-
+# ============ HTML ============
 html_content = """
 <!DOCTYPE html>
 <html lang="ru">
@@ -624,54 +602,71 @@ html_content = """
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>CashFlow — ИИ финансовый ассистент</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400;14..32,600&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            font-family: 'Inter', sans-serif;
-            background: linear-gradient(135deg, #0a0a0a, #1a1a1a);
+            font-family: system-ui, -apple-system, sans-serif;
+            background: #0a0a0a;
             min-height: 100vh;
             padding: 20px;
             color: #fff;
         }
         .container { max-width: 1200px; margin: 0 auto; }
         .card {
-            background: rgba(17,17,17,0.85);
-            backdrop-filter: blur(10px);
-            border-radius: 28px;
+            background: rgba(17,17,17,0.9);
+            border-radius: 20px;
             padding: 24px;
             margin-bottom: 20px;
             border: 1px solid rgba(234,88,12,0.3);
         }
         h1 {
             font-size: 2rem;
-            background: linear-gradient(135deg, #f97316, #ea580c);
-            -webkit-background-clip: text;
-            background-clip: text;
-            color: transparent;
+            color: #f97316;
         }
         .upload-area {
             border: 2px dashed rgba(234,88,12,0.3);
-            border-radius: 20px;
+            border-radius: 16px;
             padding: 40px;
             text-align: center;
             cursor: pointer;
         }
         .upload-area:hover { border-color: #f97316; background: rgba(234,88,12,0.1); }
         .btn {
-            background: linear-gradient(135deg, #ea580c, #9a3412);
+            background: #ea580c;
             color: white;
             border: none;
             padding: 12px 28px;
             border-radius: 40px;
             cursor: pointer;
+            font-size: 1rem;
         }
-        .result-stats { display: flex; gap: 16px; flex-wrap: wrap; }
-        .stat-card { flex: 1; background: rgba(0,0,0,0.5); padding: 20px; border-radius: 16px; text-align: center; }
-        .stat-card .value { font-size: 1.8rem; font-weight: bold; }
+        .btn:hover { background: #f97316; }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .stats {
+            display: flex;
+            gap: 16px;
+            flex-wrap: wrap;
+            margin: 16px 0;
+        }
+        .stat {
+            flex: 1;
+            background: rgba(0,0,0,0.5);
+            padding: 16px;
+            border-radius: 16px;
+            text-align: center;
+            min-width: 120px;
+        }
+        .stat .value { font-size: 1.8rem; font-weight: bold; }
+        .stat .label { font-size: 0.9rem; opacity: 0.7; margin-top: 4px; }
         .income .value { color: #f97316; }
         .expense .value { color: #ef4444; }
+        .profit .value { color: #10b981; }
+        .suggestion-buttons {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-top: 16px;
+        }
         .suggestion-btn {
             background: rgba(234,88,12,0.15);
             border: 1px solid rgba(234,88,12,0.3);
@@ -680,221 +675,255 @@ html_content = """
             cursor: pointer;
             color: white;
         }
-        .chat-messages { height: 250px; overflow-y: auto; border: 1px solid rgba(234,88,12,0.3); border-radius: 16px; padding: 16px; margin-bottom: 16px; background: rgba(0,0,0,0.3); }
+        .suggestion-btn:hover { background: rgba(234,88,12,0.4); }
+        .chat-messages {
+            height: 250px;
+            overflow-y: auto;
+            border: 1px solid rgba(234,88,12,0.3);
+            border-radius: 16px;
+            padding: 16px;
+            margin-bottom: 16px;
+            background: rgba(0,0,0,0.3);
+        }
         .chat-message-user { text-align: right; margin: 8px 0; }
-        .chat-message-user span { background: linear-gradient(135deg, #ea580c, #9a3412); padding: 8px 16px; border-radius: 20px; display: inline-block; max-width: 80%; }
+        .chat-message-user span {
+            background: #ea580c;
+            padding: 8px 16px;
+            border-radius: 20px;
+            display: inline-block;
+            max-width: 80%;
+        }
         .chat-message-bot { text-align: left; margin: 8px 0; }
-        .chat-message-bot span { background: rgba(0,0,0,0.5); padding: 8px 16px; border-radius: 20px; display: inline-block; max-width: 80%; border: 1px solid rgba(234,88,12,0.3); }
-        .chat-input { display: flex; gap: 10px; }
-        .chat-input input { flex: 1; padding: 12px; border: 1px solid rgba(234,88,12,0.3); border-radius: 40px; background: rgba(0,0,0,0.5); color: white; }
-        @media (max-width: 768px) { .result-stats { flex-direction: column; } }
+        .chat-message-bot span {
+            background: rgba(255,255,255,0.1);
+            padding: 8px 16px;
+            border-radius: 20px;
+            display: inline-block;
+            max-width: 80%;
+            border: 1px solid rgba(234,88,12,0.3);
+        }
+        .chat-input {
+            display: flex;
+            gap: 10px;
+        }
+        .chat-input input {
+            flex: 1;
+            padding: 12px;
+            border: 1px solid rgba(234,88,12,0.3);
+            border-radius: 40px;
+            background: rgba(0,0,0,0.5);
+            color: white;
+        }
+        .hidden { display: none; }
+        .spinner {
+            border: 4px solid rgba(234,88,12,0.3);
+            border-top: 4px solid #f97316;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        @media (max-width: 768px) { .stats { flex-direction: column; } }
     </style>
 </head>
 <body>
 <div class="container">
-    <div class="card"><h1>💰 CashFlow</h1><p>ИИ-финансовый ассистент</p></div>
-    
+    <div class="card">
+        <h1>💰 CashFlow</h1>
+        <p style="opacity:0.7;">ИИ-финансовый ассистент</p>
+    </div>
+
     <div class="card">
         <div class="upload-area" onclick="document.getElementById('fileInput').click()">
             <div style="font-size:48px;">📁</div>
             <p>Нажмите или перетащите файл</p>
+            <p style="font-size:12px;opacity:0.5;">Поддерживаются: CSV, Excel</p>
             <input type="file" id="fileInput" accept=".csv,.xlsx,.xls" style="display:none;">
         </div>
-        <div id="fileName" style="margin-top:10px;display:none;"></div>
-        <div style="display:flex;gap:10px;margin-top:20px;">
+        <div id="fileName" style="margin-top:10px;display:none;background:rgba(234,88,12,0.15);padding:10px;border-radius:12px;"></div>
+        <div style="display:flex;gap:10px;margin-top:16px;flex-wrap:wrap;">
             <button class="btn" id="analyzeBtn" onclick="uploadFile()" disabled>📊 Анализировать</button>
-            <button class="btn" onclick="downloadTemplate()" style="background:#2a2a2a;">📥 Шаблон CSV</button>
         </div>
     </div>
-    
-    <div id="loading" style="display:none;text-align:center;padding:20px;"><div style="border:4px solid rgba(234,88,12,0.3);border-top:4px solid #f97316;border-radius:50%;width:50px;height:50px;animation:spin 1s linear infinite;margin:0 auto;"></div><p>Анализирую...</p></div>
-    
-    <div id="resultContainer" style="display:none;">
-        <div class="card"><h3>🤖 Анализ выполнен!</h3><div id="suggestionButtons"></div></div>
-        <div id="fullReport" class="card" style="display:none;"></div>
-        <div id="comparisonBlock" class="card" style="display:none;"></div>
-        <div id="forecastBlock" class="card" style="display:none;"></div>
-        <div id="tipsBlock" class="card" style="display:none;"></div>
-        <div id="categoriesBlock" class="card" style="display:none;"></div>
-        <div id="chatBlock" class="card" style="display:none;">
+
+    <div id="loading" class="hidden" style="text-align:center;padding:20px;">
+        <div class="spinner"></div>
+        <p>Анализирую выписку...</p>
+    </div>
+
+    <div id="resultContainer" class="hidden">
+        <div class="card">
+            <h3>🤖 Анализ выполнен!</h3>
+            <div id="suggestionButtons" class="suggestion-buttons"></div>
+        </div>
+
+        <div class="card hidden" id="reportBlock">
+            <div id="reportContent"></div>
+        </div>
+
+        <div class="card hidden" id="chatBlock">
             <h3>💬 Чат с ИИ</h3>
-            <div class="chat-messages" id="chatMessages"><div>Задайте вопрос о финансах</div></div>
-            <div class="chat-input"><input type="text" id="questionInput" placeholder="Например: на чём мне сэкономить?"><button class="btn" onclick="askQuestion()">Отправить</button></div>
+            <div class="chat-messages" id="chatMessages">
+                <div style="opacity:0.5;">Задайте вопрос о финансах</div>
+            </div>
+            <div class="chat-input">
+                <input type="text" id="questionInput" placeholder="Например: на чём мне сэкономить?">
+                <button class="btn" onclick="askQuestion()">Отправить</button>
+            </div>
         </div>
     </div>
 </div>
 
 <script>
 let analysisData = null;
-const fileInput = document.getElementById('fileInput'), analyzeBtn = document.getElementById('analyzeBtn');
+const fileInput = document.getElementById('fileInput');
+const analyzeBtn = document.getElementById('analyzeBtn');
 
 fileInput.onchange = () => {
     if (fileInput.files.length) {
-        document.getElementById('fileName').textContent = "Выбран: " + fileInput.files[0].name;
+        document.getElementById('fileName').textContent = '📄 Выбран: ' + fileInput.files[0].name;
         document.getElementById('fileName').style.display = 'block';
         analyzeBtn.disabled = false;
     }
 };
 
-function downloadTemplate() { window.location.href = '/download-template'; }
-
 async function uploadFile() {
     if (!fileInput.files.length) return;
+    
     const formData = new FormData();
     formData.append('file', fileInput.files[0]);
-    document.getElementById('loading').style.display = 'block';
-    document.getElementById('resultContainer').style.display = 'none';
+    
+    document.getElementById('loading').classList.remove('hidden');
+    document.getElementById('resultContainer').classList.add('hidden');
+    
     try {
-        const res = await fetch('/upload', { method: 'POST', body: formData });
-        const data = await res.json();
-        analysisData = data;
-        showSmartSuggestions(data);
-        document.getElementById('resultContainer').style.display = 'block';
-    } catch(e) { alert('Ошибка: ' + e.message); }
-    finally { document.getElementById('loading').style.display = 'none'; }
+        const response = await fetch('/upload', { method: 'POST', body: formData });
+        const data = await response.json();
+        
+        if (response.ok) {
+            analysisData = data;
+            showResults(data);
+            document.getElementById('resultContainer').classList.remove('hidden');
+        } else {
+            alert('Ошибка: ' + (data.error || 'Неизвестная ошибка'));
+        }
+    } catch (error) {
+        alert('Ошибка: ' + error.message);
+    } finally {
+        document.getElementById('loading').classList.add('hidden');
+    }
 }
 
-function showSmartSuggestions(data) {
+function showResults(data) {
+    document.getElementById('reportContent').innerHTML = `
+        <div class="stats">
+            <div class="stat income"><div class="value">${data.income.toFixed(2)} ₽</div><div class="label">💰 Доходы</div></div>
+            <div class="stat expense"><div class="value">${data.expense.toFixed(2)} ₽</div><div class="label">💸 Расходы</div></div>
+            <div class="stat profit"><div class="value">${data.net_profit >= 0 ? '+' : ''}${data.net_profit.toFixed(2)} ₽</div><div class="label">✅ Прибыль</div></div>
+        </div>
+        <div class="stats">
+            <div class="stat"><div class="value">${data.profitability}%</div><div class="label">📈 Рентабельность</div></div>
+            <div class="stat"><div class="value">${data.avg_check.toFixed(2)} ₽</div><div class="label">💰 Средний чек</div></div>
+            <div class="stat"><div class="value">${data.rows_count}</div><div class="label">📊 Строк</div></div>
+        </div>
+        ${data.cash_gap_warning ? `<div style="background:rgba(239,68,68,0.2);color:#ef4444;padding:12px;border-radius:12px;margin-top:12px;">⚠️ ${data.cash_gap_warning}</div>` : ''}
+    `;
+    document.getElementById('reportBlock').classList.remove('hidden');
+
     const buttons = [
-        { text: '📈 Полный отчёт', func: showFullReport },
-        { text: '📊 Сравнение', func: showComparison },
-        { text: '⚠️ Прогноз', func: showForecast },
-        { text: '💡 Советы', func: showTips },
-        { text: '📊 Категории', func: showCategories },
-        { text: '💬 Чат', func: showChat }
+        { text: '📈 Полный отчёт', func: 'showReport' },
+        { text: '💡 Советы', func: 'showTips' },
+        { text: '📊 Категории', func: 'showCategories' },
+        { text: '💬 Чат', func: 'showChat' }
     ];
-    document.getElementById('suggestionButtons').innerHTML = buttons.map(b => `<button class="suggestion-btn" onclick="${b.func}()">${b.text}</button>`).join('');
+    document.getElementById('suggestionButtons').innerHTML = buttons.map(b => 
+        `<button class="suggestion-btn" onclick="${b.func}()">${b.text}</button>`
+    ).join('');
 }
 
-function showFullReport() {
-    const d = analysisData;
-    document.getElementById('fullReport').innerHTML = `
-        <h3>📊 Отчёт</h3>
-        <div class="result-stats">
-            <div class="stat-card income"><div class="value">${d.income.toFixed(2)} ₽</div><div>💰 Доходы</div></div>
-            <div class="stat-card expense"><div class="value">${d.expense.toFixed(2)} ₽</div><div>💸 Расходы</div></div>
-            <div class="stat-card"><div class="value" style="color:${d.net_profit>=0?'#f97316':'#ef4444'}">${d.net_profit>=0?'+':''}${d.net_profit.toFixed(2)} ₽</div><div>✅ Прибыль</div></div>
-        </div>
-        <div class="result-stats">
-            <div class="stat-card"><div class="value">${d.profitability}%</div><div>📈 Рентабельность</div></div>
-            <div class="stat-card"><div class="value">${d.avg_check.toFixed(2)} ₽</div><div>💰 Средний чек</div></div>
-        </div>
-        <div style="background:rgba(234,88,12,0.15);padding:10px;border-radius:12px;margin-top:10px;">📊 Обработано строк: ${d.rows_count}</div>
-        ${d.cash_gap_warning ? `<div style="background:rgba(239,68,68,0.2);color:#ef4444;padding:10px;border-radius:12px;margin-top:10px;">⚠️ ${d.cash_gap_warning}</div>` : ''}
-    `;
-    showBlock('fullReport');
-}
-
-function showComparison() {
-    const comp = analysisData.comparison || {};
-    if (!comp.has_data) {
-        document.getElementById('fullReport').innerHTML = '<p>Нет данных для сравнения</p>';
-        showBlock('fullReport');
-        return;
-    }
-    document.getElementById('fullReport').innerHTML = `
-        <h3>📊 Сравнение с прошлым месяцем</h3>
-        <div class="result-stats">
-            <div class="stat-card"><div>💰 Доходы</div><div class="value">${comp.current_income.toFixed(2)} ₽</div><div>было: ${comp.last_income.toFixed(2)} ₽</div><div style="color:${comp.income_change>=0?'#10b981':'#ef4444'}">${comp.income_change>=0?'+':''}${comp.income_change.toFixed(1)}%</div></div>
-            <div class="stat-card"><div>💸 Расходы</div><div class="value">${comp.current_expense.toFixed(2)} ₽</div><div>было: ${comp.last_expense.toFixed(2)} ₽</div><div style="color:${comp.expense_change<=0?'#10b981':'#ef4444'}">${comp.expense_change>=0?'+':''}${comp.expense_change.toFixed(1)}%</div></div>
-            <div class="stat-card"><div>✅ Прибыль</div><div class="value">${comp.current_profit.toFixed(2)} ₽</div><div>было: ${comp.last_profit.toFixed(2)} ₽</div><div style="color:${comp.profit_change>=0?'#10b981':'#ef4444'}">${comp.profit_change>=0?'+':''}${comp.profit_change.toFixed(1)}%</div></div>
-        </div>
-    `;
-    showBlock('fullReport');
-}
-
-function showForecast() {
-    const forecast = analysisData.forecast_3months || [];
-    if (!forecast.length) {
-        document.getElementById('forecastBlock').innerHTML = '<p>Нет данных для прогноза</p>';
-        showBlock('forecastBlock');
-        return;
-    }
-    let html = '<h3>⚠️ Прогноз на 3 месяца</h3>';
-    for (const m of forecast) {
-        html += `<div style="background:rgba(0,0,0,0.3);padding:12px;border-radius:16px;margin-bottom:10px;border-left:4px solid ${m.profit>=0?'#10b981':'#ef4444'}">
-            <strong>📅 Месяц ${m.month}</strong>
-            <div>💰 Доходы: ${m.income.toFixed(2)} ₽</div>
-            <div>💸 Расходы: ${m.expense.toFixed(2)} ₽</div>
-            <div>✅ Прибыль: ${m.profit>=0?'+':''}${m.profit.toFixed(2)} ₽</div>
-            <div style="background:rgba(234,88,12,0.15);padding:6px;border-radius:8px;margin-top:6px;">${m.risk_text} риск</div>
-        </div>`;
-    }
-    document.getElementById('forecastBlock').innerHTML = html;
-    showBlock('forecastBlock');
+function showReport() {
+    document.getElementById('reportBlock').classList.remove('hidden');
+    document.getElementById('chatBlock').classList.add('hidden');
+    document.getElementById('reportBlock').scrollIntoView({ behavior: 'smooth' });
 }
 
 function showTips() {
     const d = analysisData;
     if (d.tips) {
-        const items = d.tips.split('•').filter(i=>i.trim());
-        document.getElementById('fullReport').innerHTML = `<h3>💡 Советы</h3><ul>${items.map(i=>`<li>• ${i.trim()}</li>`).join('')}</ul>`;
-        showBlock('fullReport');
+        const items = d.tips.split('•').filter(i => i.trim());
+        document.getElementById('reportContent').innerHTML = `
+            <h3>💡 Советы по экономии</h3>
+            <ul style="margin-left:20px;line-height:1.8;">
+                ${items.map(i => `<li>• ${i.trim()}</li>`).join('')}
+            </ul>
+        `;
     } else {
-        document.getElementById('fullReport').innerHTML = '<p>Нет советов</p>';
-        showBlock('fullReport');
+        document.getElementById('reportContent').innerHTML = '<p>Нет советов</p>';
     }
+    document.getElementById('reportBlock').classList.remove('hidden');
+    document.getElementById('chatBlock').classList.add('hidden');
 }
 
 function showCategories() {
     const d = analysisData;
     if (d.categories && Object.keys(d.categories).length) {
-        let html = '<h3>📊 Категории</h3><table style="width:100%"><tr><th>Категория</th><th>Сумма</th></tr>';
+        let html = '<h3>📊 Расходы по категориям</h3><table style="width:100%;border-collapse:collapse;">';
         for (const [cat, amt] of Object.entries(d.categories)) {
-            html += `<tr><td>${cat}</td><td>${amt.toFixed(2)} ₽</td></tr>`;
+            html += `<tr style="border-bottom:1px solid rgba(234,88,12,0.2);"><td style="padding:8px;">${cat}</td><td style="padding:8px;text-align:right;">${amt.toFixed(2)} ₽</td></tr>`;
         }
         html += '</table>';
-        document.getElementById('fullReport').innerHTML = html;
-        showBlock('fullReport');
+        document.getElementById('reportContent').innerHTML = html;
     } else {
-        document.getElementById('fullReport').innerHTML = '<p>Нет данных</p>';
-        showBlock('fullReport');
+        document.getElementById('reportContent').innerHTML = '<p>Нет данных по категориям</p>';
     }
+    document.getElementById('reportBlock').classList.remove('hidden');
+    document.getElementById('chatBlock').classList.add('hidden');
 }
 
 function showChat() {
-    document.getElementById('resultContainer').style.display = 'block';
-    showBlock('chatBlock');
-}
-
-function showBlock(id) {
-    const blocks = ['fullReport','comparisonBlock','forecastBlock','tipsBlock','categoriesBlock','chatBlock'];
-    blocks.forEach(b => { const el = document.getElementById(b); if (el) el.style.display = 'none'; });
-    document.getElementById(id).style.display = 'block';
+    document.getElementById('chatBlock').classList.remove('hidden');
+    document.getElementById('reportBlock').classList.add('hidden');
+    document.getElementById('chatBlock').scrollIntoView({ behavior: 'smooth' });
 }
 
 async function askQuestion() {
-    const q = document.getElementById('questionInput').value.trim();
-    if (!q) return;
+    const question = document.getElementById('questionInput').value.trim();
+    if (!question) return;
+    
     const chatDiv = document.getElementById('chatMessages');
-    chatDiv.innerHTML += `<div class="chat-message-user"><span>${escapeHtml(q)}</span></div>`;
+    if (chatDiv.children.length === 1 && chatDiv.children[0].textContent.includes('Задайте вопрос')) {
+        chatDiv.innerHTML = '';
+    }
+    
+    chatDiv.innerHTML += `<div class="chat-message-user"><span>${escapeHtml(question)}</span></div>`;
     document.getElementById('questionInput').value = '';
     chatDiv.innerHTML += `<div class="chat-message-bot"><span>🤔 ИИ думает...</span></div>`;
     chatDiv.scrollTop = chatDiv.scrollHeight;
+    
     try {
-        const res = await fetch('/ask', {
+        const response = await fetch('/ask', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ question: q })
+            body: JSON.stringify({ question: question })
         });
-        const data = await res.json();
+        const data = await response.json();
         chatDiv.innerHTML = chatDiv.innerHTML.replace('<div class="chat-message-bot"><span>🤔 ИИ думает...</span></div>', '');
         chatDiv.innerHTML += `<div class="chat-message-bot"><span>${escapeHtml(data.answer)}</span></div>`;
         chatDiv.scrollTop = chatDiv.scrollHeight;
-    } catch(e) {
+    } catch (error) {
         chatDiv.innerHTML = chatDiv.innerHTML.replace('<div class="chat-message-bot"><span>🤔 ИИ думает...</span></div>', '');
         chatDiv.innerHTML += `<div class="chat-message-bot"><span>❌ Ошибка</span></div>`;
     }
 }
 
-function escapeHtml(t) { const d=document.createElement('div'); d.textContent=t; return d.innerHTML; }
-</script>
-<style>
-@keyframes spin {
-    0% { transform: rotate(0deg); }
-    100% { transform: rotate(360deg); }
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
 }
-</style>
+</script>
 </body>
 </html>
 """
