@@ -157,34 +157,44 @@ def check_budget_alerts(expenses_by_category):
                 })
     return alerts
 
-# ============ YANDEXGPT ============
+# ============ YANDEXGPT (ЧЕРЕЗ REQUESTS) ============
 YANDEX_CLOUD_FOLDER = "b1g41a3v1qrmkt4rccos"
 YANDEX_CLOUD_API_KEY = os.getenv('YANDEX_API_KEY')
 
 def ask_yandex(prompt: str) -> str:
-    """Запрос к YandexGPT"""
+    """Запрос к YandexGPT через requests (без openai)"""
     if not YANDEX_CLOUD_API_KEY:
+        print("⚠️ YANDEX_API_KEY не найден")
         return None
     
+    url = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
+    
+    headers = {
+        "Authorization": f"Api-Key {YANDEX_CLOUD_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    
+    data = {
+        "modelUri": f"gpt://{YANDEX_CLOUD_FOLDER}/yandexgpt-5.1/latest",
+        "completionOptions": {
+            "temperature": 0.7,
+            "maxTokens": 500
+        },
+        "messages": [
+            {"role": "system", "content": "Ты финансовый ассистент для микробизнеса. Отвечай на русском, коротко и по делу."},
+            {"role": "user", "content": prompt}
+        ]
+    }
+    
     try:
-        client = openai.OpenAI(
-            api_key=YANDEX_CLOUD_API_KEY,
-            base_url="https://ai.api.cloud.yandex.net/v1",
-            project=YANDEX_CLOUD_FOLDER
-        )
-        
-        response = client.responses.create(
-            model=f"gpt://{YANDEX_CLOUD_FOLDER}/yandexgpt-5.1/latest",
-            temperature=0.7,
-            instructions="Ты финансовый ассистент для микробизнеса. Отвечай на русском, коротко и по делу.",
-            input=prompt,
-            max_output_tokens=500
-        )
-        return response.output_text
+        response = requests.post(url, headers=headers, json=data)
+        response.raise_for_status()
+        result = response.json()
+        return result['result']['alternatives'][0]['message']['text']
     except Exception as e:
         print(f"❌ Ошибка YandexGPT: {e}")
+        print(f"📄 Ответ: {response.text if 'response' in locals() else 'Нет ответа'}")
         return None
-
 last_analysis_result = None
 
 category_names = {
