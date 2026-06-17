@@ -1,9 +1,13 @@
 from fastapi import FastAPI, UploadFile, File, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
+from dotenv import load_dotenv  # ✅ ДОБАВИТЬ ЭТУ СТРОЧКУ
 import openai
 import pandas as pd
 import os
+# ... остальные импорты
+
+load_dotenv()  # ✅ Теперь работает
 import calendar
 import io
 import json
