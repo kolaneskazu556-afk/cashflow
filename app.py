@@ -124,10 +124,11 @@ def analyze_statement(file_content: bytes, filename: str):
     df.columns = df.columns.str.lower().str.strip()
     print(f"📊 Колонки: {list(df.columns)}")
     
+    # 🔥 ИСПРАВЛЕНО: теперь ищет operationdate, date, дата
     date_col = None
     for col in df.columns:
         col_lower = col.lower()
-        if 'date' in col_lower or 'дата' in col_lower:
+        if 'date' in col_lower or 'дата' in col_lower or 'operationdate' in col_lower:
             date_col = col
             break
     
@@ -182,9 +183,22 @@ def analyze_statement(file_content: bytes, filename: str):
         top_with_desc = [(d['description'], d['amount']) for d in top_expenses]
         tips = get_savings_tips(categories, total_expense, top_with_desc)
     
+    # 🔥 ПРОГНОЗ ТЕПЕРЬ РАБОТАЕТ
+    predicted_total = None
+    predicted_change = None
+    if days_count > 0 and total_expense > 0:
+        avg_daily_expense = total_expense / days_count
+        predicted_total = avg_daily_expense * 30
+        predicted_change = ((predicted_total - total_expense) / total_expense) * 100 if total_expense > 0 else 0
+        print(f"📊 Прогноз на месяц: {predicted_total:.2f} ₽, изменение: {predicted_change:.1f}%")
+    
     cash_gap_warning = None
     if net_profit < 0:
         cash_gap_warning = f"⚠️ Расходы превышают доходы на {abs(net_profit):.2f} ₽. Рекомендуется сократить расходы или увеличить доходы."
+    elif predicted_total and total_income and predicted_total > total_income:
+        predicted_net = total_income - predicted_total
+        if predicted_net < 0:
+            cash_gap_warning = f"⚠️ По прогнозу, в следующем месяце ожидается убыток {abs(predicted_net):.2f} ₽. Возможен кассовый разрыв."
     
     comparison = {'has_data': False}
     if date_col and len(df) > 0:
@@ -261,6 +275,8 @@ def analyze_statement(file_content: bytes, filename: str):
         'incomes_count': len(incomes),
         'expenses_count': len(expenses),
         'days_count': days_count,
+        'predicted_total': float(predicted_total) if predicted_total else None,
+        'predicted_change': float(predicted_change) if predicted_change else None,
         'seasonality': seasonality,
         'profitability': round(profitability, 1),
         'avg_check': round(avg_check, 2),
@@ -318,7 +334,7 @@ async def ask_question(request: Request):
     except Exception as e:
         return JSONResponse({'answer': f'Ошибка: {str(e)}'})
 
-# HTML код с красивым дизайном (полная версия)
+# HTML код (полный рабочий)
 html_content = """
 <!DOCTYPE html>
 <html lang="ru">
