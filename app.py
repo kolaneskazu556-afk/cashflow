@@ -32,7 +32,6 @@ from fastapi import Header
 async def get_user_id(x_user_id: str = Header(None)):
     return x_user_id or "default_user"
 
-аг
 # ============ БАЗА ДАННЫХ ============
 def init_db():
     conn = sqlite3.connect('cashflow_v2.db')
