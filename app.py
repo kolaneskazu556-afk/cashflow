@@ -1,13 +1,20 @@
-from fastapi import FastAPI, UploadFile, File, Request
+from fastapi import FastAPI, UploadFile, File, Request, Depends, Header
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
-from gigachat import GigaChat
+from openai import OpenAI
 from dotenv import load_dotenv
 import pandas as pd
 import os
+import calendar
 import io
+import json
+import sqlite3
 from datetime import datetime
 from io import BytesIO
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 
 load_dotenv()
 
@@ -21,23 +28,169 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Подключаем GigaChat
-giga = None
-try:
-    credentials = os.getenv('GIGACHAT_CREDENTIALS')
-    if credentials:
-        giga = GigaChat(
-            credentials=credentials,
-            scope=os.getenv('GIGACHAT_SCOPE', 'GIGACHAT_API_PERS'),
-            verify_ssl_certs=False,
-            model="GigaChat-Pro"
+from fastapi import Header
+async def get_user_id(x_user_id: str = Header(None)):
+    return x_user_id or "default_user"
+
+аг
+# ============ БАЗА ДАННЫХ ============
+def init_db():
+    conn = sqlite3.connect('cashflow_v2.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS analyses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            date TEXT NOT NULL,
+            filename TEXT NOT NULL,
+            income REAL,
+            expense REAL,
+            net_profit REAL,
+            categories TEXT,
+            months_data TEXT,
+            forecast TEXT,
+            full_data TEXT
         )
-        print("✅ GigaChat подключен")
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS budgets (
+            user_id TEXT NOT NULL,
+            category TEXT,
+            limit_amount REAL,
+            month TEXT,
+            PRIMARY KEY (user_id, category, month)
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+init_db()
+
+def save_analysis_to_db(user_id, filename, result):
+    conn = sqlite3.connect('cashflow_v2.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO analyses (user_id, date, filename, income, expense, net_profit, categories, months_data, forecast, full_data)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (
+        user_id,
+        datetime.now().isoformat(),
+        filename,
+        result.get('income'),
+        result.get('expense'),
+        result.get('net_profit'),
+        json.dumps(result.get('categories', {})),
+        json.dumps(result.get('months_data', {})),
+        json.dumps(result.get('forecast_3months', [])),
+        json.dumps(result)
+    ))
+    conn.commit()
+    conn.close()
+
+def get_history_from_db(user_id, limit=10):
+    conn = sqlite3.connect('cashflow_v2.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT id, date, filename, income, expense, net_profit FROM analyses WHERE user_id = ? ORDER BY date DESC LIMIT ?', (user_id, limit))
+    rows = cursor.fetchall()
+    conn.close()
+    return [{'id': row[0], 'date': row[1], 'filename': row[2], 'income': row[3], 'expense': row[4], 'net_profit': row[5]} for row in rows]
+
+def get_analysis_by_id(analysis_id, user_id):
+    conn = sqlite3.connect('cashflow_v2.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT full_data FROM analyses WHERE id = ? AND user_id = ?', (analysis_id, user_id))
+    row = cursor.fetchone()
+    conn.close()
+    if row:
+        return json.loads(row[0])
+    return None
+
+def get_budget_limits(user_id, month=None):
+    if month is None:
+        month = datetime.now().strftime('%Y-%m')
+    conn = sqlite3.connect('cashflow_v2.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT category, limit_amount FROM budgets WHERE user_id = ? AND month = ?', (user_id, month))
+    rows = cursor.fetchall()
+    conn.close()
+    return {row[0]: row[1] for row in rows}
+
+def set_budget_limit(user_id, category, limit_amount, month=None):
+    if month is None:
+        month = datetime.now().strftime('%Y-%m')
+    conn = sqlite3.connect('cashflow_v2.db')
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM budgets WHERE user_id = ? AND category = ? AND month = ?', (user_id, category, month))
+    cursor.execute('INSERT INTO budgets (user_id, category, limit_amount, month) VALUES (?, ?, ?, ?)', (user_id, category, limit_amount, month))
+    conn.commit()
+    conn.close()
+
+def check_budget_alerts(user_id, expenses_by_category):
+    current_month = datetime.now().strftime('%Y-%m')
+    budgets = get_budget_limits(user_id, current_month)
+    alerts = []
+    for category, spent in expenses_by_category.items():
+        if category in budgets:
+            limit = budgets[category]
+            if spent > limit:
+                percent = (spent - limit) / limit * 100
+                alerts.append({
+                    'category': category,
+                    'spent': spent,
+                    'limit': limit,
+                    'percent': round(percent, 1),
+                    'message': f"⚠️ Превышен лимит по категории '{category}': {spent:.2f} ₽ / {limit:.2f} ₽ (+{percent:.1f}%)"
+                })
+            elif spent > limit * 0.8:
+                alerts.append({
+                    'category': category,
+                    'spent': spent,
+                    'limit': limit,
+                    'percent': round((spent / limit) * 100, 1),
+                    'message': f"⚠️ Лимит по категории '{category}' почти исчерпан: {spent:.2f} ₽ / {limit:.2f} ₽ ({round(spent/limit*100)}%)"
+                })
+    return alerts
+
+def check_budget_alerts(expenses_by_category):
+    current_month = datetime.now().strftime('%Y-%m')
+    budgets = get_budget_limits(current_month)
+    alerts = []
+    for category, spent in expenses_by_category.items():
+        if category in budgets:
+            limit = budgets[category]
+            if spent > limit:
+                percent = (spent - limit) / limit * 100
+                alerts.append({
+                    'category': category,
+                    'spent': spent,
+                    'limit': limit,
+                    'percent': round(percent, 1),
+                    'message': f"⚠️ Превышен лимит по категории '{category}': {spent:.2f} ₽ / {limit:.2f} ₽ (+{percent:.1f}%)"
+                })
+            elif spent > limit * 0.8:
+                alerts.append({
+                    'category': category,
+                    'spent': spent,
+                    'limit': limit,
+                    'percent': round((spent / limit) * 100, 1),
+                    'message': f"⚠️ Лимит по категории '{category}' почти исчерпан: {spent:.2f} ₽ / {limit:.2f} ₽ ({round(spent/limit*100)}%)"
+                })
+    return alerts
+
+# ============ DEEPSEEK ============
+deepseek_client = None
+try:
+    api_key = os.getenv('DEEPSEEK_API_KEY')
+    if api_key:
+        deepseek_client = OpenAI(
+            api_key=api_key,
+            base_url="https://api.deepseek.com"
+        )
+        print("✅ DeepSeek API подключен")
     else:
-        print("⚠️ GIGACHAT_CREDENTIALS не найдена")
+        print("⚠️ DEEPSEEK_API_KEY не найдена")
 except Exception as e:
-    print(f"❌ Ошибка GigaChat: {e}")
-    giga = None
+    print(f"❌ Ошибка DeepSeek: {e}")
 
 last_analysis_result = None
 
@@ -53,24 +206,65 @@ category_names = {
     'other': 'Прочее'
 }
 
+# НОВЫЙ КЭШ И ПРАВИЛА (Ускорение)
+_category_cache = {}
+
 def ai_categorize(description):
-    if giga is None or not description or description == 'nan':
+    if not description or str(description).lower() == 'nan':
         return 'other'
-    prompt = f"""
-    Определи категорию расхода для операции: "{description}"
-    Категории: rent, supplies, advertising, taxes, transport, food, cafe, education, other
-    Ответь ТОЛЬКО одним словом из этих вариантов.
-    """
-    try:
-        response = giga.chat(prompt)
-        category = response.choices[0].message.content.strip().lower()
-        return category if category in category_names else 'other'
-    except:
-        return 'other'
+    
+    desc_lower = str(description).lower().strip()
+    
+    # 1. Кэш
+    if desc_lower in _category_cache:
+        return _category_cache[desc_lower]
+
+    # 2. Быстрые правила
+    if any(word in desc_lower for word in ['аренда', 'офис', 'помещение']):
+        cat = 'rent'
+    elif any(word in desc_lower for word in ['такси', 'бензин', 'метро', 'транспорт', 'каршеринг', 'заправка']):
+        cat = 'transport'
+    elif any(word in desc_lower for word in ['реклама', 'таргет', 'директ', 'продвижение']):
+        cat = 'advertising'
+    elif any(word in desc_lower for word in ['налог', 'фнс', 'штраф', 'взнос']):
+        cat = 'taxes'
+    elif any(word in desc_lower for word in ['продукты', 'пятерочка', 'магнит', 'лента', 'сырье', 'закупка']):
+        cat = 'supplies'
+    elif any(word in desc_lower for word in ['кафе', 'ресторан', 'кофе', 'обед', 'доставка еды']):
+        cat = 'cafe'
+    elif any(word in desc_lower for word in ['курсы', 'обучение', 'книга']):
+        cat = 'education'
+    else:
+        # 3. ИИ (если правила не сработали)
+        if deepseek_client is None:
+            cat = 'other'
+        else:
+            prompt = f"""
+            Определи категорию расхода для операции: "{description}"
+            Категории: rent, supplies, advertising, taxes, transport, food, cafe, education, other
+            Ответь ТОЛЬКО одним словом из этих вариантов.
+            """
+            try:
+                response = deepseek_client.chat.completions.create(
+                    model="deepseek-chat",
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.1,
+                    max_tokens=20
+                )
+                cat = response.choices[0].message.content.strip().lower()
+                if cat not in category_names:
+                    cat = 'other'
+            except Exception as e:
+                print(f"Ошибка категоризации ИИ: {e}")
+                cat = 'other'
+
+    _category_cache[desc_lower] = cat
+    return cat
 
 def get_savings_tips(expenses_by_category, total_expense, top_expenses):
-    if not expenses_by_category or total_expense == 0:
-        return "• Загрузите выписку с расходами для получения персонализированных советов"
+    if deepseek_client is None or not expenses_by_category or total_expense == 0:
+        return "• Загрузите выписку с расходами для получения персонализированных советов\n• Анализируйте самые большие категории расходов\n• Сравнивайте цены у разных поставщиков"
+    
     categories_text = "\n".join([f"- {cat}: {amount:.2f} руб." for cat, amount in list(expenses_by_category.items())[:5]])
     prompt = f"""Расходы микробизнеса за период:
 {categories_text}
@@ -79,7 +273,12 @@ def get_savings_tips(expenses_by_category, total_expense, top_expenses):
 Каждый совет начинай с новой строки и ставь в начале символ "•".
 Напиши 3 совета именно для этих расходов:"""
     try:
-        response = giga.chat(prompt)
+        response = deepseek_client.chat.completions.create(
+            model="deepseek-chat",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+            max_tokens=300
+        )
         tips = response.choices[0].message.content.strip()
         if tips and '•' in tips and len(tips) > 50:
             return tips
@@ -88,6 +287,14 @@ def get_savings_tips(expenses_by_category, total_expense, top_expenses):
     except Exception as e:
         print(f"Ошибка при генерации советов: {e}")
         return "• Анализируйте самые большие категории расходов\n• Сравнивайте цены у разных поставщиков\n• Отслеживайте динамику трат еженедельно"
+
+def predict_next_month(expenses_by_category, total_expense, days_count):
+    if days_count == 0 or total_expense == 0:
+        return None, None, None
+    avg_daily_expense = total_expense / days_count
+    predicted_monthly = avg_daily_expense * 30
+    change_percent = ((predicted_monthly - total_expense) / total_expense) * 100 if total_expense > 0 else 0
+    return predicted_monthly, change_percent, {}
 
 def parse_file(file_content: bytes, filename: str):
     ext = filename.split('.')[-1].lower()
@@ -116,7 +323,7 @@ def detect_income_expense(row):
             return 'income', val
     return 'unknown', 0
 
-def analyze_statement(file_content: bytes, filename: str):
+def analyze_statement(file_content: bytes, filename: str, user_id: str):
     global last_analysis_result
     print(f"📁 Анализ файла: {filename}, размер: {len(file_content)} байт")
     
@@ -124,15 +331,16 @@ def analyze_statement(file_content: bytes, filename: str):
     df.columns = df.columns.str.lower().str.strip()
     print(f"📊 Колонки: {list(df.columns)}")
     
-    # 🔥 ИСПРАВЛЕНО: теперь ищет operationdate, date, дата
     date_col = None
     for col in df.columns:
         col_lower = col.lower()
-        if 'date' in col_lower or 'дата' in col_lower or 'operationdate' in col_lower:
+        if 'date' in col_lower or 'дата' in col_lower:
             date_col = col
             break
     
     days_count = 0
+    months_data = {}
+    
     if date_col:
         try:
             df[date_col] = pd.to_datetime(df[date_col], errors='coerce', dayfirst=True)
@@ -141,6 +349,18 @@ def analyze_statement(file_content: bytes, filename: str):
             if pd.notna(date_min) and pd.notna(date_max):
                 days_count = (date_max - date_min).days + 1
                 print(f"📅 Найдена колонка дат: {date_col}, период: {date_min.date()} - {date_max.date()}")
+            
+            df['year_month'] = df[date_col].dt.strftime('%Y-%m')
+            for month in df['year_month'].unique():
+                month_df = df[df['year_month'] == month]
+                month_income = month_df[month_df['amount'] > 0]['amount'].sum()
+                month_expense = abs(month_df[month_df['amount'] < 0]['amount'].sum())
+                months_data[month] = {
+                    'income': float(month_income),
+                    'expense': float(month_expense),
+                    'profit': float(month_income - month_expense)
+                }
+            print(f"📊 Данных по месяцам: {len(months_data)} месяцев")
         except Exception as e:
             print(f"Ошибка парсинга дат: {e}")
     
@@ -171,74 +391,117 @@ def analyze_statement(file_content: bytes, filename: str):
     
     categories = {}
     if expense_details:
-        expense_df = pd.DataFrame(expense_details).head(10)
+        # Увеличили до 50 для лучшей статистики
+        expense_df = pd.DataFrame(expense_details).head(50)
         expense_df['category'] = expense_df['description'].apply(ai_categorize)
         for cat, amt in expense_df.groupby('category')['amount'].sum().items():
             categories[category_names.get(cat, cat)] = float(amt)
         print(f"📂 Категории: {list(categories.keys())}")
     
-    tips = ""
-    if categories and total_expense > 0:
-        top_expenses = sorted(expense_details, key=lambda x: x['amount'], reverse=True)[:3]
-        top_with_desc = [(d['description'], d['amount']) for d in top_expenses]
-        tips = get_savings_tips(categories, total_expense, top_with_desc)
+    tips = get_savings_tips(categories, total_expense, [])
+    predicted_total, predicted_change, _ = predict_next_month(categories, total_expense, days_count)
     
-    # 🔥 ПРОГНОЗ ТЕПЕРЬ РАБОТАЕТ
-    predicted_total = None
-    predicted_change = None
-    if days_count > 0 and total_expense > 0:
-        avg_daily_expense = total_expense / days_count
-        predicted_total = avg_daily_expense * 30
-        predicted_change = ((predicted_total - total_expense) / total_expense) * 100 if total_expense > 0 else 0
-        print(f"📊 Прогноз на месяц: {predicted_total:.2f} ₽, изменение: {predicted_change:.1f}%")
+    forecast_3months = []
+    cash_gaps = []
     
-    cash_gap_warning = None
-    if net_profit < 0:
-        cash_gap_warning = f"⚠️ Расходы превышают доходы на {abs(net_profit):.2f} ₽. Рекомендуется сократить расходы или увеличить доходы."
-    elif predicted_total and total_income and predicted_total > total_income:
-        predicted_net = total_income - predicted_total
-        if predicted_net < 0:
-            cash_gap_warning = f"⚠️ По прогнозу, в следующем месяце ожидается убыток {abs(predicted_net):.2f} ₽. Возможен кассовый разрыв."
+    if len(months_data) >= 1:
+        sorted_months = sorted(months_data.keys())
+        monthly_expenses = [months_data[m]['expense'] for m in sorted_months]
+        
+        if len(monthly_expenses) >= 3:
+            trend = (monthly_expenses[-1] - monthly_expenses[0]) / len(monthly_expenses)
+        else:
+            trend = 0
+        
+        avg_expense = sum(monthly_expenses) / len(monthly_expenses)
+        last_expense = monthly_expenses[-1] if monthly_expenses else total_expense
+        
+        for i in range(1, 4):
+            predicted_expense = last_expense + (trend * i)
+            if predicted_expense <= 0:
+                predicted_expense = avg_expense
+            
+            if len(monthly_expenses) >= 2:
+                income_trend = (months_data[sorted_months[-1]]['income'] - months_data[sorted_months[0]]['income']) / len(monthly_expenses)
+                predicted_income = months_data[sorted_months[-1]]['income'] + (income_trend * i)
+            else:
+                predicted_income = total_income
+            
+            predicted_profit = predicted_income - predicted_expense
+            
+            risk_level = "low"
+            risk_text = "🟢 Низкий"
+            if predicted_profit < 0:
+                risk_level = "critical"
+                risk_text = "🔴 Критический"
+                cash_gaps.append({
+                    'month': i,
+                    'shortage': abs(predicted_profit),
+                    'advice': f"Ожидается нехватка {abs(predicted_profit):.2f} ₽"
+                })
+            elif predicted_profit < last_expense * 0.1:
+                risk_level = "medium"
+                risk_text = "🟡 Средний"
+            
+            forecast_3months.append({
+                'month': i,
+                'income': round(predicted_income, 2),
+                'expense': round(predicted_expense, 2),
+                'profit': round(predicted_profit, 2),
+                'risk_level': risk_level,
+                'risk_text': risk_text
+            })
     
     comparison = {'has_data': False}
-    if date_col and len(df) > 0:
-        try:
-            last_date = df[date_col].max()
-            current_month = last_date.month
-            current_year = last_date.year
-            last_month = current_month - 1 if current_month > 1 else 12
-            last_year = current_year if current_month > 1 else current_year - 1
-            
-            df['month'] = pd.to_datetime(df[date_col]).dt.month
-            df['year'] = pd.to_datetime(df[date_col]).dt.year
-            
-            current_mask = (df['year'] == current_year) & (df['month'] == current_month)
-            current_income = df[current_mask & (df['amount'] > 0)]['amount'].sum()
-            current_expense = abs(df[current_mask & (df['amount'] < 0)]['amount'].sum())
-            current_profit = current_income - current_expense
-            
-            last_mask = (df['year'] == last_year) & (df['month'] == last_month)
-            last_income = df[last_mask & (df['amount'] > 0)]['amount'].sum()
-            last_expense = abs(df[last_mask & (df['amount'] < 0)]['amount'].sum())
-            last_profit = last_income - last_expense
-            
-            if last_income > 0 or last_expense > 0:
-                comparison = {
-                    'has_data': True,
-                    'income_change': ((current_income - last_income) / last_income * 100) if last_income > 0 else 0,
-                    'expense_change': ((current_expense - last_expense) / last_expense * 100) if last_expense > 0 else 0,
-                    'profit_change': ((current_profit - last_profit) / last_profit * 100) if last_profit != 0 else 0,
-                    'current_income': float(current_income),
-                    'last_income': float(last_income),
-                    'current_expense': float(current_expense),
-                    'last_expense': float(last_expense),
-                    'current_profit': float(current_profit),
-                    'last_profit': float(last_profit),
-                    'current_month': f"{current_month}.{current_year}",
-                    'last_month': f"{last_month}.{last_year}"
-                }
-        except Exception as e:
-            print(f"Ошибка сравнения: {e}")
+    monthly_comparison = {}
+    
+    if len(months_data) >= 2:
+        sorted_months = sorted(months_data.keys())
+        current_month_key = sorted_months[-1]
+        previous_month_key = sorted_months[-2]
+        
+        current = months_data[current_month_key]
+        previous = months_data[previous_month_key]
+        
+        income_change = ((current['income'] - previous['income']) / previous['income'] * 100) if previous['income'] > 0 else 0
+        expense_change = ((current['expense'] - previous['expense']) / previous['expense'] * 100) if previous['expense'] > 0 else 0
+        profit_change = ((current['profit'] - previous['profit']) / previous['profit'] * 100) if previous['profit'] != 0 else 0
+        
+        comparison = {
+            'has_data': True,
+            'current_month': current_month_key,
+            'previous_month': previous_month_key,
+            'income': {
+                'current': current['income'],
+                'previous': previous['income'],
+                'change': round(income_change, 1),
+                'change_abs': round(current['income'] - previous['income'], 2)
+            },
+            'expense': {
+                'current': current['expense'],
+                'previous': previous['expense'],
+                'change': round(expense_change, 1),
+                'change_abs': round(current['expense'] - previous['expense'], 2)
+            },
+            'profit': {
+                'current': current['profit'],
+                'previous': previous['profit'],
+                'change': round(profit_change, 1),
+                'change_abs': round(current['profit'] - previous['profit'], 2)
+            }
+        }
+        
+        for month in sorted_months[-6:]:
+            monthly_comparison[month] = months_data[month]
+    
+    budget_alerts = check_budget_alerts(user_id, categories)
+    
+    cash_gap_warning = None
+    if cash_gaps:
+        first_gap = cash_gaps[0]
+        cash_gap_warning = f"⚠️ {first_gap['advice']}. Рекомендуется сократить расходы или увеличить доходы."
+    elif net_profit < 0:
+        cash_gap_warning = f"⚠️ Расходы превышают доходы на {abs(net_profit):.2f} ₽. Рекомендуется сократить расходы или увеличить доходы."
     
     seasonality = {'has_data': False, 'expense_by_month': {}, 'by_weekday': {}}
     if date_col and len(df) > 0:
@@ -257,15 +520,7 @@ def analyze_statement(file_content: bytes, filename: str):
         except Exception as e:
             print(f"Ошибка сезонности: {e}")
     
-    last_analysis_result = {
-        'income': float(total_income),
-        'expense': float(total_expense),
-        'net_profit': float(net_profit),
-        'categories': categories,
-        'rows_count': len(df)
-    }
-    
-    return {
+    result = {
         'income': float(total_income),
         'expense': float(total_expense),
         'net_profit': float(net_profit),
@@ -283,8 +538,243 @@ def analyze_statement(file_content: bytes, filename: str):
         'client_analysis': client_analysis,
         'cash_gap_warning': cash_gap_warning,
         'comparison': comparison,
+        'monthly_comparison': monthly_comparison,
+        'forecast_3months': forecast_3months,
+        'budget_alerts': budget_alerts,
+        'months_data': months_data,
         'insights': []
     }
+    
+    last_analysis_result = result
+    save_analysis_to_db(user_id, filename, result)
+    
+    return result
+
+# ============ ЭНДПОИНТЫ ============
+
+@app.get("/history")
+async def get_history():
+    history = get_history_from_db()
+    return JSONResponse(history)
+
+@app.get("/history/{analysis_id}")
+async def get_history_item(analysis_id: int):
+    result = get_analysis_by_id(analysis_id)
+    if result:
+        return JSONResponse(result)
+    return JSONResponse({'error': 'Не найдено'}, status_code=404)
+
+@app.post("/set-budget")
+async def set_budget(request: Request):
+    data = await request.json()
+    category = data.get('category')
+    limit = data.get('limit')
+    month = data.get('month')
+    if not category or limit is None:
+        return JSONResponse({'error': 'Укажите категорию и лимит'}, status_code=400)
+    set_budget_limit(category, float(limit), month)
+    return JSONResponse({'success': True, 'message': f'Лимит для {category} установлен: {limit} ₽'})
+
+@app.get("/get-budgets")
+async def get_budgets():
+    budgets = get_budget_limits()
+    return JSONResponse(budgets)
+
+@app.get("/monthly-comparison")
+async def get_monthly_comparison():
+    global last_analysis_result
+    if not last_analysis_result:
+        return JSONResponse({'error': 'Нет данных. Сначала загрузите выписку.'}, status_code=400)
+    
+    return JSONResponse({
+        'comparison': last_analysis_result.get('comparison', {}),
+        'monthly_data': last_analysis_result.get('monthly_comparison', {}),
+        'forecast': last_analysis_result.get('forecast_3months', [])
+    })
+
+@app.get("/cash-gap-forecast")
+async def get_cash_gap_forecast():
+    global last_analysis_result
+    if not last_analysis_result:
+        return JSONResponse({'error': 'Нет данных. Сначала загрузите выписку.'}, status_code=400)
+    
+    forecast = last_analysis_result.get('forecast_3months', [])
+    cash_gaps = last_analysis_result.get('cash_gaps', [])
+    
+    return JSONResponse({
+        'forecast': forecast,
+        'cash_gaps': cash_gaps,
+        'has_warning': len(cash_gaps) > 0
+    })
+
+@app.post("/ask")
+async def ask_question(request: Request):
+    global last_analysis_result
+    data = await request.json()
+    question = data.get('question', '')
+    
+    if not last_analysis_result:
+        return JSONResponse({'answer': 'Сначала загрузите и проанализируйте выписку'})
+    
+    if deepseek_client is None:
+        return JSONResponse({'answer': '❌ DeepSeek не подключен. Проверьте API ключ в настройках Render.'})
+    
+    context = f"""
+Данные о финансах микробизнеса:
+Доходы: {last_analysis_result['income']:.2f} ₽
+Расходы: {last_analysis_result['expense']:.2f} ₽
+Чистая прибыль: {last_analysis_result['net_profit']:.2f} ₽
+Рентабельность: {last_analysis_result.get('profitability', 0)}%
+Расходы по категориям:
+"""
+    for cat, amount in last_analysis_result.get('categories', {}).items():
+        context += f"- {cat}: {amount:.2f} ₽\n"
+    
+    prompt = f"""
+Пользователь задаёт вопрос: "{question}"
+
+Вот данные о финансах:
+{context}
+
+Ответь коротко, конкретно и полезно. Используй цифры из данных.
+"""
+    try:
+        response = deepseek_client.chat.completions.create(
+            model="deepseek-chat",
+            messages=[
+                {"role": "system", "content": "Ты финансовый ассистент для микробизнеса. Отвечай на русском, коротко и по делу. Используй цифры из данных."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.7,
+            max_tokens=500
+        )
+        answer = response.choices[0].message.content
+        return JSONResponse({'answer': answer})
+    except Exception as e:
+        error_msg = str(e)
+        if "insufficient_quota" in error_msg.lower() or "billing" in error_msg.lower():
+            return JSONResponse({'answer': '⚠️ Закончились бесплатные токены DeepSeek. Пополните баланс или получите новый API-ключ.'})
+        return JSONResponse({'answer': f'❌ Ошибка DeepSeek: {error_msg}'})
+
+@app.get("/download-template")
+async def download_template():
+    content = """date,description,amount,type
+2025-04-01,Оплата от клиента,50000,пополнение
+2025-04-02,Аренда офиса,-15000,списание
+2025-04-03,Покупка продуктов,-8000,списание
+2025-04-04,Оплата от клиента,30000,пополнение
+2025-04-05,Реклама,-5000,списание
+2025-04-06,Налог,-4000,списание
+2025-04-07,Закуп сырья,-12000,списание"""
+    
+    return StreamingResponse(
+        io.BytesIO(content.encode('utf-8')),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=cashflow_template.csv"}
+    )
+@app.get("/history")
+async def get_history(user_id: str = Depends(get_user_id)):
+    history = get_history_from_db(user_id)
+    return JSONResponse(history)
+
+@app.get("/history/{analysis_id}")
+async def get_history_item(analysis_id: int, user_id: str = Depends(get_user_id)):
+    result = get_analysis_by_id(analysis_id, user_id)
+    if result:
+        return JSONResponse(result)
+    return JSONResponse({'error': 'Не найдено'}, status_code=404)
+
+@app.post("/set-budget")
+async def set_budget(request: Request, user_id: str = Depends(get_user_id)):
+    data = await request.json()
+    category = data.get('category')
+    limit = data.get('limit')
+    month = data.get('month')
+    if not category or limit is None:
+        return JSONResponse({'error': 'Укажите категорию и лимит'}, status_code=400)
+    set_budget_limit(user_id, category, float(limit), month)
+    return JSONResponse({'success': True, 'message': f'Лимит для {category} установлен: {limit} ₽'})
+
+@app.get("/get-budgets")
+async def get_budgets(user_id: str = Depends(get_user_id)):
+    budgets = get_budget_limits(user_id)
+    return JSONResponse(budgets)
+
+@app.get("/monthly-comparison")
+async def get_monthly_comparison(user_id: str = Depends(get_user_id)):
+    global last_analysis_result
+    if not last_analysis_result:
+        return JSONResponse({'error': 'Нет данных. Сначала загрузите выписку.'}, status_code=400)
+    
+    return JSONResponse({
+        'comparison': last_analysis_result.get('comparison', {}),
+        'monthly_data': last_analysis_result.get('monthly_comparison', {}),
+        'forecast': last_analysis_result.get('forecast_3months', [])
+    })
+
+@app.get("/cash-gap-forecast")
+async def get_cash_gap_forecast(user_id: str = Depends(get_user_id)):
+    global last_analysis_result
+    if not last_analysis_result:
+        return JSONResponse({'error': 'Нет данных. Сначала загрузите выписку.'}, status_code=400)
+    
+    forecast = last_analysis_result.get('forecast_3months', [])
+    cash_gaps = last_analysis_result.get('cash_gaps', [])
+    
+    return JSONResponse({
+        'forecast': forecast,
+        'cash_gaps': cash_gaps,
+        'has_warning': len(cash_gaps) > 0
+    })
+
+@app.post("/ask")
+async def ask_question(request: Request, user_id: str = Depends(get_user_id)):
+    global last_analysis_result
+    data = await request.json()
+    question = data.get('question', '')
+    
+    if not last_analysis_result:
+        return JSONResponse({'answer': 'Сначала загрузите и проанализируйте выписку'})
+    
+    if deepseek_client is None:
+        return JSONResponse({'answer': '❌ DeepSeek не подключен. Проверьте API ключ в настройках Render.'})
+    
+    context = f"""
+Данные о финансах микробизнеса:
+Доходы: {last_analysis_result['income']:.2f} ₽
+Расходы: {last_analysis_result['expense']:.2f} ₽
+Чистая прибыль: {last_analysis_result['net_profit']:.2f} ₽
+Рентабельность: {last_analysis_result.get('profitability', 0)}%
+Расходы по категориям:
+"""
+    for cat, amount in last_analysis_result.get('categories', {}).items():
+        context += f"- {cat}: {amount:.2f} ₽\n"
+    
+    prompt = f"""
+Пользователь задаёт вопрос: "{question}"
+
+Вот данные о финансах:
+{context}
+
+Ответь коротко, конкретно и полезно. Используй цифры из данных.
+"""
+    try:
+        response = deepseek_client.chat.completions.create(
+            model="deepseek-chat",
+            messages=[
+                {"role": "system", "content": "Ты финансовый ассистент для микробизнеса. Отвечай на русском, коротко и по делу. Используй цифры из данных."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.7,
+            max_tokens=500
+        )
+        answer = response.choices[0].message.content
+        return JSONResponse({'answer': answer})
+    except Exception as e:
+        error_msg = str(e)
+        if "insufficient_quota" in error_msg.lower() or "billing" in error_msg.lower():
+            return JSONResponse({'answer': '⚠️ Закончились бесплатные токены DeepSeek. Пополните баланс или получите новый API-ключ.'})
+        return JSONResponse({'answer': f'❌ Ошибка DeepSeek: {error_msg}'})
 
 @app.get("/download-template")
 async def download_template():
@@ -303,38 +793,21 @@ async def download_template():
         headers={"Content-Disposition": "attachment; filename=cashflow_template.csv"}
     )
 
-@app.post("/ask")
-async def ask_question(request: Request):
-    global last_analysis_result
-    data = await request.json()
-    question = data.get('question', '')
-    if not last_analysis_result:
-        return JSONResponse({'answer': 'Сначала загрузите и проанализируйте выписку'})
-    if not giga:
-        return JSONResponse({'answer': 'GigaChat не подключен. Проверьте API ключ.'})
-    context = f"""
-Данные о финансах микробизнеса:
-Доходы: {last_analysis_result['income']:.2f} ₽
-Расходы: {last_analysis_result['expense']:.2f} ₽
-Чистая прибыль: {last_analysis_result['net_profit']:.2f} ₽
-Расходы по категориям:
-"""
-    for cat, amount in last_analysis_result.get('categories', {}).items():
-        context += f"- {cat}: {amount:.2f} ₽\n"
-    prompt = f"""
-Ты финансовый ассистент для микробизнеса. Вот данные о расходах:
-{context}
-Пользователь задаёт вопрос: "{question}"
-Ответь коротко, конкретно и полезно. Используй цифры из данных.
-"""
+@app.post("/upload")
+async def upload_file(file: UploadFile = File(...), user_id: str = Depends(get_user_id)):
     try:
-        response = giga.chat(prompt)
-        answer = response.choices[0].message.content
-        return JSONResponse({'answer': answer})
+        print(f"📁 Получен файл: {file.filename} от {user_id}")
+        file_content = await file.read()
+        print(f"📄 Размер файла: {len(file_content)} байт")
+        if len(file_content) == 0:
+            return JSONResponse({'error': 'Файл пуст'}, status_code=400)
+        result = analyze_statement(file_content, file.filename, user_id)
+        return JSONResponse(result)
     except Exception as e:
-        return JSONResponse({'answer': f'Ошибка: {str(e)}'})
-
-# HTML код (полный рабочий)
+        print(f"❌ Ошибка: {e}")
+        import traceback
+        traceback.print_exc()
+        return JSONResponse({'error': str(e)}, status_code=400)
 html_content = """
 <!DOCTYPE html>
 <html lang="ru">
@@ -359,7 +832,6 @@ html_content = """
             --success: #f97316;
             --danger: #ef4444;
             --warning: #f59e0b;
-            --info: #3b82f6;
             --card-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
             --hover-shadow: 0 12px 40px rgba(234, 88, 12, 0.2);
             --backdrop-blur: blur(10px);
@@ -638,6 +1110,61 @@ html_content = """
         .cost-result-icon { font-size: 1.8rem; color: var(--accent); margin-bottom: 0.5rem; }
         .cost-result-label { font-size: 0.7rem; opacity: 0.8; margin-top: 0.3rem; }
         .cost-result-value { font-size: 1.2rem; font-weight: bold; margin-top: 0.3rem; color: var(--accent); }
+        .forecast-card {
+            background: rgba(0,0,0,0.3);
+            border-radius: 16px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+        }
+        .risk-critical { border-left: 4px solid #ef4444; }
+        .risk-medium { border-left: 4px solid #f59e0b; }
+        .risk-low { border-left: 4px solid #10b981; }
+        .comparison-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+        .comparison-item {
+            text-align: center;
+            padding: 1rem;
+            background: rgba(0,0,0,0.3);
+            border-radius: 16px;
+        }
+        .change-positive { color: #10b981; }
+        .change-negative { color: #ef4444; }
+        .alert-warning {
+            background: rgba(239, 68, 68, 0.2);
+            border-left: 4px solid #ef4444;
+            padding: 12px;
+            margin: 10px 0;
+            border-radius: 12px;
+        }
+        .budget-input {
+            display: flex;
+            gap: 10px;
+            margin: 10px 0;
+            flex-wrap: wrap;
+        }
+        .budget-input input, .budget-input select {
+            padding: 10px;
+            border-radius: 12px;
+            border: 1px solid var(--border-color);
+            background: var(--stat-bg);
+            color: var(--text-primary);
+        }
+        .history-item {
+            background: rgba(0,0,0,0.3);
+            padding: 12px;
+            margin: 8px 0;
+            border-radius: 16px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .history-item:hover {
+            background: rgba(234,88,12,0.2);
+            transform: translateX(5px);
+        }
         @media (max-width: 768px) {
             body { padding: 0.8rem; }
             .desktop-title { display: none; }
@@ -647,6 +1174,7 @@ html_content = """
             .bar-item { min-width: 45px; }
             .bar-fill { width: 25px; }
             .cost-result-grid { flex-direction: column; }
+            .comparison-grid { grid-template-columns: 1fr; }
         }
     </style>
 </head>
@@ -665,20 +1193,24 @@ html_content = """
         <div class="upload-area" onclick="document.getElementById('fileInput').click()">
             <i class="fas fa-cloud-upload-alt"></i>
             <p>Нажмите или перетащите файл</p>
-            <p style="font-size:0.7rem;opacity:0.7;">Поддерживаются: CSV, Excel, PDF</p>
-            <input type="file" id="fileInput" accept=".csv,.xlsx,.xls,.pdf" style="display: none;">
+            <p style="font-size:0.7rem;opacity:0.7;">Поддерживаются: CSV, Excel</p>
+            <input type="file" id="fileInput" accept=".csv,.xlsx,.xls" style="display: none;">
         </div>
         <div id="fileName" class="info" style="display:none;"></div>
         <div class="progress-container" id="progressContainer"><div class="progress-bar" id="progressBar"></div></div>
         <div style="display: flex; gap: 10px; margin-top: 1rem;">
             <button class="btn" id="analyzeBtn" onclick="uploadFile()" disabled style="flex: 1;">📊 Анализировать</button>
-            <button class="btn" onclick="downloadTemplate()" style="flex: 0; background: #2a2a2a; border: 1px solid #f97316;">📥 Шаблон CSV</button>
+            <a href="/download-template" download class="btn" style="flex: 0; background: #2a2a2a; border: 1px solid #f97316; text-decoration: none; display: inline-flex; align-items: center; justify-content: center;">📥 Шаблон CSV</a>
         </div>
     </div>
-    <div id="skeletonLoader" style="display:none;"><div class="card"><div class="skeleton" style="height:200px;"></div></div></div>
-    <div class="loading" id="loading" style="display:none;text-align:center;padding:2rem;"><div class="spinner"></div><p>Анализирую выписку с помощью ИИ...</p></div>
+    <div id="loading" style="display:none;text-align:center;padding:2rem;"><div class="spinner"></div><p>Анализирую выписку с помощью ИИ...</p></div>
     <div id="resultContainer" style="display:none;">
-        <div class="card" id="suggestionCard"><h3><i class="fas fa-robot"></i> Анализ выполнен!</h3><div id="insightsContainer"></div><div id="suggestionButtons" class="suggestion-buttons"></div></div>
+        <div class="card" id="suggestionCard">
+            <h3><i class="fas fa-robot"></i> Анализ выполнен!</h3>
+            <div id="budgetAlerts"></div>
+            <div id="insightsContainer"></div>
+            <div id="suggestionButtons" class="suggestion-buttons"></div>
+        </div>
         <div id="fullReport" class="card" style="display:none;"><div id="reportContent"></div></div>
         <div id="forecastBlock" class="card" style="display:none;"><div id="forecastContent"></div></div>
         <div id="tipsBlock" class="card" style="display:none;"><div id="tipsContent"></div></div>
@@ -696,10 +1228,37 @@ html_content = """
             </div>
             <div id="costResult"></div>
         </div>
+        <div id="budgetBlock" class="card" style="display:none;">
+            <h3><i class="fas fa-chart-line"></i> Планирование бюджета</h3>
+            <div class="budget-input">
+                <select id="budgetCategory"></select>
+                <input type="number" id="budgetLimit" placeholder="Лимит в ₽">
+                <button class="btn" onclick="setBudget()">Установить лимит</button>
+            </div>
+            <div id="budgetList"></div>
+        </div>
+        <div id="historyBlock" class="card" style="display:none;">
+            <h3><i class="fas fa-history"></i> История анализов</h3>
+            <div id="historyList"></div>
+        </div>
         <div id="chatBlock" class="card" style="display:none;"><h3>Чат с ИИ</h3><div class="chat-messages" id="chatMessages"><div>Задайте вопрос о финансах</div></div><div class="chat-input"><input type="text" id="questionInput" placeholder="Например: на чём мне сэкономить?"><button class="btn" onclick="askQuestion()">Отправить</button></div></div>
     </div>
 </div>
+
 <script>
+// Генерируем уникальный ID для пользователя и сохраняем в браузере
+let userId = localStorage.getItem('cashflow_user_id');
+if (!userId) {
+    userId = 'user_' + Math.random().toString(36).substr(2, 9);
+    localStorage.setItem('cashflow_user_id', userId);
+}
+
+// Функция-обертка для fetch, чтобы автоматически подставлять ID в заголовки
+async function fetchWithUser(url, options = {}) {
+    if (!options.headers) options.headers = {};
+    options.headers['X-User-Id'] = userId;
+    return fetch(url, options);
+}
 let selectedFile = null, analysisData = null, expenseChart = null, trendChart = null;
 const fileInput = document.getElementById('fileInput'), analyzeBtn = document.getElementById('analyzeBtn'), fileNameDiv = document.getElementById('fileName');
 const progressContainer = document.getElementById('progressContainer'), progressBar = document.getElementById('progressBar');
@@ -726,13 +1285,8 @@ dropZone.ondrop = (e) => {
     } 
 };
 
-function downloadTemplate() {
-    window.location.href = '/download-template';
-}
-
 async function uploadFile() {
     if(!selectedFile) return;
-    console.log("📁 Загружаем файл:", selectedFile.name);
     
     const formData = new FormData();
     formData.append('file', selectedFile);
@@ -741,68 +1295,51 @@ async function uploadFile() {
     document.getElementById('resultContainer').style.display = 'none';
     let progress = 0; const interval = setInterval(() => { progress += 10; if(progress>=90) clearInterval(interval); progressBar.style.width = Math.min(progress,90)+'%'; }, 200);
     try { 
-        const response = await fetch('/upload',{method:'POST',body:formData}); 
-        console.log("📡 Статус ответа:", response.status);
-        if (!response.ok) {
-            throw new Error(`HTTP ${response.status}`);
-        }
+        const response = await fetchWithUser('/upload',{method:'POST',body:formData}); 
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const result = await response.json(); 
-        console.log("✅ Результат анализа:", result);
         progressBar.style.width='100%'; 
         setTimeout(()=>{progressContainer.style.display='none';},500);
         analysisData = result; 
+        showBudgetAlerts(result.budget_alerts);
         showSmartSuggestions(result); 
     }
     catch(error){ 
-        console.error("❌ Ошибка:", error);
         alert('Ошибка: '+error.message); 
         progressContainer.style.display='none';
     }
     finally{ clearInterval(interval); document.getElementById('loading').style.display='none'; }
 }
 
-function drawChart(categories) {
-    const ctx = document.getElementById('expenseChart')?.getContext('2d'); if(!ctx) return;
-    if(expenseChart) expenseChart.destroy();
-    expenseChart = new Chart(ctx, { type:'pie', data:{ labels:Object.keys(categories), datasets:[{ data:Object.values(categories), backgroundColor:['#ea580c','#f97316','#c2410c','#fdba74','#9a3412','#7c2d12','#b45309','#d97706','#a16207'] }] }, options:{ responsive:true } });
-}
-
-function drawTrendChart() {
-    const d = analysisData;
-    if(!d) return;
-    const ctx = document.getElementById('trendChart')?.getContext('2d'); if(!ctx) return;
-    if(trendChart) trendChart.destroy();
-    trendChart = new Chart(ctx, { 
-        type:'line', 
-        data:{ 
-            labels:['Неделя 1', 'Неделя 2', 'Неделя 3', 'Неделя 4'], 
-            datasets:[
-                { label:'Доходы', data:[d.income*0.6, d.income*0.8, d.income*0.9, d.income], borderColor:'#f97316', backgroundColor:'rgba(249,115,22,0.1)', tension:0.4, fill:true, pointBackgroundColor:'#ea580c', pointBorderColor:'#fff', pointRadius:5, pointHoverRadius:7 },
-                { label:'Расходы', data:[d.expense*0.7, d.expense*0.85, d.expense*0.95, d.expense], borderColor:'#ef4444', backgroundColor:'rgba(239,68,68,0.1)', tension:0.4, fill:true, pointBackgroundColor:'#dc2626', pointBorderColor:'#fff', pointRadius:5, pointHoverRadius:7 }
-            ] 
-        }, 
-        options:{ responsive:true, maintainAspectRatio:true, animation:{ duration:1000, easing:'easeOutCubic' }, plugins:{ legend:{ position:'top', labels:{ color:'#ffffff' } } } } 
-    });
+function showBudgetAlerts(alerts) {
+    const container = document.getElementById('budgetAlerts');
+    if (!alerts || alerts.length === 0) {
+        container.innerHTML = '';
+        return;
+    }
+    container.innerHTML = alerts.map(alert => 
+        `<div class="alert-warning"><i class="fas fa-exclamation-triangle"></i> ${alert.message}</div>`
+    ).join('');
 }
 
 function showSmartSuggestions(data) {
-    const insightsHtml = data.insights && data.insights.length ? data.insights.map(i=>'<div class="insight-item"><i class="fas fa-info-circle" style="color:#f97316;"></i> '+escapeHtml(i)+'</div>').join('') : '<div class="insight-item"><i class="fas fa-check-circle" style="color:#f97316;"></i> Анализ выполнен успешно</div>';
-    document.getElementById('insightsContainer').innerHTML = insightsHtml;
+    document.getElementById('insightsContainer').innerHTML = '<div class="insight-item"><i class="fas fa-check-circle" style="color:#f97316;"></i> Анализ выполнен успешно</div>';
     const allButtons = [
-        { key:'full', text:'📈 Полный отчёт', func:showFullReport, title:'Показать доходы, расходы и прибыль' },
-        { key:'forecast', text:'🔮 Прогноз', func:showForecast, title:'Прогноз расходов на следующий месяц' },
-        { key:'savings', text:'💡 Советы', func:showTips, title:'Персональные советы по экономии' },
-        { key:'categories', text:'📊 Категории', func:showCategories, title:'Анализ расходов по категориям' },
-        { key:'trend', text:'📈 Динамика', func:showTrend, title:'График изменения доходов и расходов' },
-        { key:'seasonality', text:'📅 Сезонность', func:showSeasonality, title:'Анализ трат по месяцам и дням недели' },
-        { key:'cost', text:'💰 Себестоимость', func:showCost, title:'Расчёт себестоимости товара' },
-        { key:'clients', text:'👥 Анализ клиентов', func:showClientAnalysis, title:'Откуда приходят деньги' },
-        { key:'cashgap', text:'⚠️ Кассовые разрывы', func:showCashGap, title:'Прогноз возможных разрывов' },
-        { key:'comparison', text:'📊 Сравнение с прошлым месяцем', func:showComparison, title:'Анализ динамики показателей' },
-        { key:'chat', text:'💬 Чат', func:showChat, title:'Задать вопрос ИИ о финансах' }
+        { key:'full', text:'📈 Полный отчёт', func:showFullReport },
+        { key:'comparison', text:'📊 Сравнение с прошлым месяцем', func:showComparison },
+        { key:'forecast', text:'⚠️ Прогноз кассовых разрывов', func:showCashGapForecast },
+        { key:'savings', text:'💡 Советы', func:showTips },
+        { key:'categories', text:'📊 Категории', func:showCategories },
+        { key:'trend', text:'📈 Динамика', func:showTrend },
+        { key:'seasonality', text:'📅 Сезонность', func:showSeasonality },
+        { key:'cost', text:'💰 Себестоимость', func:showCost },
+        { key:'clients', text:'👥 Анализ клиентов', func:showClientAnalysis },
+        { key:'budget', text:'💰 Бюджет', func:showBudget },
+        { key:'history', text:'📜 История', func:showHistory },
+        { key:'chat', text:'💬 Чат', func:showChat }
     ];
     let buttonsHtml = '';
-    for(let btn of allButtons) buttonsHtml += `<button class="suggestion-btn" onclick="${btn.func.name}()" title="${btn.title}"><i class="fas ${btn.key==='full'?'fa-chart-simple':btn.key==='forecast'?'fa-calendar-week':btn.key==='savings'?'fa-lightbulb':btn.key==='categories'?'fa-tags':btn.key==='trend'?'fa-chart-line':btn.key==='seasonality'?'fa-chart-gantt':btn.key==='cost'?'fa-calculator':btn.key==='clients'?'fa-users':btn.key==='cashgap'?'fa-exclamation-triangle':btn.key==='comparison'?'fa-chart-line':'fa-comments'}"></i> ${btn.text}</button>`;
+    for(let btn of allButtons) buttonsHtml += `<button class="suggestion-btn" onclick="${btn.func.name}()">${btn.text}</button>`;
     document.getElementById('suggestionButtons').innerHTML = buttonsHtml;
     document.getElementById('resultContainer').style.display = 'block';
     if(window.innerWidth<=768 && mobileMenu) mobileMenu.style.display = 'none';
@@ -810,17 +1347,15 @@ function showSmartSuggestions(data) {
 
 function showFullReport() {
     const d = analysisData;
-    const profitClass = d.net_profit >= 0 ? 'profit-positive' : 'profit-negative';
-    const profitabilityColor = d.profitability >= 0 ? '#10b981' : '#ef4444';
     document.getElementById('reportContent').innerHTML = `
         <h3><i class="fas fa-chart-simple"></i> Отчёт CashFlow</h3>
         <div class="result-stats">
             <div class="stat-card income"><div class="value">${d.income.toFixed(2)} ₽</div><div class="label">💰 Доходы</div></div>
             <div class="stat-card expense"><div class="value">${d.expense.toFixed(2)} ₽</div><div class="label">💸 Расходы</div></div>
-            <div class="stat-card ${profitClass}"><div class="value">${d.net_profit>=0?'+':''}${d.net_profit.toFixed(2)} ₽</div><div class="label">✅ Чистая прибыль</div></div>
+            <div class="stat-card"><div class="value" style="color: ${d.net_profit >= 0 ? '#f97316' : '#ef4444'}">${d.net_profit >= 0 ? '+' : ''}${d.net_profit.toFixed(2)} ₽</div><div class="label">✅ Чистая прибыль</div></div>
         </div>
         <div class="result-stats">
-            <div class="stat-card"><div class="value" style="color:${profitabilityColor};">${d.profitability}%</div><div class="label">📈 Рентабельность</div></div>
+            <div class="stat-card"><div class="value">${d.profitability}%</div><div class="label">📈 Рентабельность</div></div>
             <div class="stat-card"><div class="value">${d.avg_check.toFixed(2)} ₽</div><div class="label">💰 Средний чек</div></div>
         </div>
         <div class="info"><i class="fas fa-info-circle"></i> Обработано строк: ${d.rows_count}<br><i class="fas fa-arrow-up"></i> Доходов: ${d.incomes_count}, <i class="fas fa-arrow-down"></i> Расходов: ${d.expenses_count}</div>
@@ -829,13 +1364,55 @@ function showFullReport() {
     showBlock('fullReport');
 }
 
-function showForecast() {
-    const d = analysisData;
-    if(d.predicted_total && d.predicted_total>0){
-        const changeColor = d.predicted_change >= 0 ? '#ef4444' : '#f97316';
-        const changeIcon = d.predicted_change >= 0 ? '📈' : '📉';
-        document.getElementById('forecastContent').innerHTML = `<div class="forecast-box"><h3><i class="fas fa-calendar-week"></i> Прогноз на следующий месяц</h3><div class="result-stats"><div class="stat-card"><div class="value" style="color:#f97316;">${d.predicted_total.toFixed(2)} ₽</div><div class="label">Прогнозируемые расходы</div></div><div class="stat-card"><div class="value" style="color:${changeColor};">${changeIcon} ${d.predicted_change>=0?'+':''}${d.predicted_change.toFixed(1)}%</div><div class="label">Изменение</div></div></div><div class="info"><i class="fas fa-chart-line"></i> Прогноз основан на ${d.days_count||'?'} днях</div></div>`;
-    } else document.getElementById('forecastContent').innerHTML = '<p><i class="fas fa-ban"></i> Нет данных для прогноза</p>';
+async function showComparison() {
+    const res = await fetchWithUser('/monthly-comparison');
+    const data = await res.json();
+    const comp = data.comparison;
+    if (!comp.has_data) {
+        document.getElementById('reportContent').innerHTML = '<div class="info"><i class="fas fa-chart-line"></i> Нет данных для сравнения с прошлым месяцем. Загрузите выписку за несколько месяцев.</div>';
+        showBlock('fullReport');
+        return;
+    }
+    const incomeColor = comp.income.change >= 0 ? '#10b981' : '#ef4444';
+    const expenseColor = comp.expense.change <= 0 ? '#10b981' : '#ef4444';
+    const profitColor = comp.profit.change >= 0 ? '#10b981' : '#ef4444';
+    document.getElementById('reportContent').innerHTML = `
+        <h3><i class="fas fa-chart-line"></i> Сравнение с прошлым месяцем</h3>
+        <div class="result-stats">
+            <div class="stat-card"><div>💰 Доходы</div><div class="value" style="font-size:1.2rem;">${comp.income.current.toFixed(2)} ₽</div><div>было: ${comp.income.previous.toFixed(2)} ₽</div><div style="color:${incomeColor}">${comp.income.change >= 0 ? '+' : ''}${comp.income.change}%</div></div>
+            <div class="stat-card"><div>💸 Расходы</div><div class="value" style="font-size:1.2rem;">${comp.expense.current.toFixed(2)} ₽</div><div>было: ${comp.expense.previous.toFixed(2)} ₽</div><div style="color:${expenseColor}">${comp.expense.change >= 0 ? '+' : ''}${comp.expense.change}%</div></div>
+            <div class="stat-card"><div>✅ Прибыль</div><div class="value" style="font-size:1.2rem;">${comp.profit.current.toFixed(2)} ₽</div><div>было: ${comp.profit.previous.toFixed(2)} ₽</div><div style="color:${profitColor}">${comp.profit.change >= 0 ? '+' : ''}${comp.profit.change}%</div></div>
+        </div>
+    `;
+    showBlock('fullReport');
+}
+
+async function showCashGapForecast() {
+    const res = await fetchWithUser('/cash-gap-forecast');
+    const data = await res.json();
+    if (!data.forecast || data.forecast.length === 0) {
+        document.getElementById('forecastContent').innerHTML = '<p>Нет данных для прогноза</p>';
+        showBlock('forecastBlock');
+        return;
+    }
+    let html = '<h3><i class="fas fa-chart-line"></i> Прогноз кассовых разрывов на 3 месяца</h3>';
+    for (const m of data.forecast) {
+        let riskClass = m.risk_level === 'critical' ? 'risk-critical' : (m.risk_level === 'medium' ? 'risk-medium' : 'risk-low');
+        let profitColor = m.profit >= 0 ? '#10b981' : '#ef4444';
+        let profitSign = m.profit >= 0 ? '+' : '';
+        html += `
+            <div class="forecast-card ${riskClass}">
+                <div style="font-weight: bold; margin-bottom: 8px;">📅 Месяц ${m.month}</div>
+                <div class="result-stats" style="margin-bottom: 0;">
+                    <div class="stat-card" style="padding: 8px;"><div>💰 Доходы</div><div style="font-weight: bold;">${m.income.toFixed(2)} ₽</div></div>
+                    <div class="stat-card" style="padding: 8px;"><div>💸 Расходы</div><div style="font-weight: bold;">${m.expense.toFixed(2)} ₽</div></div>
+                    <div class="stat-card" style="padding: 8px;"><div>✅ Прибыль</div><div style="font-weight: bold; color: ${profitColor};">${profitSign}${m.profit.toFixed(2)} ₽</div></div>
+                </div>
+                <div class="info" style="margin-top: 8px;">${m.risk_text} уровень риска</div>
+            </div>
+        `;
+    }
+    document.getElementById('forecastContent').innerHTML = html;
     showBlock('forecastBlock');
 }
 
@@ -844,7 +1421,7 @@ function showTips() {
     if(d.tips){
         const items = d.tips.split('•').filter(i=>i.trim());
         document.getElementById('tipsContent').innerHTML = `<div class="tips-box"><h3><i class="fas fa-lightbulb"></i> Советы по экономии</h3><ul>${items.map(i=>`<li><i class="fas fa-check-circle" style="color:#f97316;"></i> ${escapeHtml(i.trim())}</li>`).join('')}</ul></div>`;
-    } else document.getElementById('tipsContent').innerHTML = '<p><i class="fas fa-ban"></i> Нет советов</p>';
+    } else document.getElementById('tipsContent').innerHTML = '<p>Нет советов</p>';
     showBlock('tipsBlock');
 }
 
@@ -858,12 +1435,30 @@ function showCategories() {
         }
         table += '</table>';
         document.getElementById('categoriesContent').innerHTML = table;
-        drawChart(d.categories);
-    } else document.getElementById('categoriesContent').innerHTML = '<p><i class="fas fa-ban"></i> Нет данных для категоризации</p>';
+        const ctx = document.getElementById('expenseChart').getContext('2d');
+        if(expenseChart) expenseChart.destroy();
+        expenseChart = new Chart(ctx, { type:'pie', data:{ labels:Object.keys(d.categories), datasets:[{ data:Object.values(d.categories), backgroundColor:['#ea580c','#f97316','#c2410c','#fdba74','#9a3412','#7c2d12','#b45309','#d97706','#a16207'] }] }, options:{ responsive:true } });
+    } else document.getElementById('categoriesContent').innerHTML = '<p>Нет данных для категоризации</p>';
     showBlock('categoriesBlock');
 }
 
-function showTrend() { drawTrendChart(); showBlock('trendBlock'); }
+function showTrend() {
+    const d = analysisData;
+    const ctx = document.getElementById('trendChart').getContext('2d');
+    if(trendChart) trendChart.destroy();
+    trendChart = new Chart(ctx, { 
+        type:'line', 
+        data:{ 
+            labels:['Неделя 1', 'Неделя 2', 'Неделя 3', 'Неделя 4'], 
+            datasets:[
+                { label:'Доходы', data:[d.income*0.6, d.income*0.8, d.income*0.9, d.income], borderColor:'#f97316', backgroundColor:'rgba(249,115,22,0.1)', tension:0.4, fill:true, pointBackgroundColor:'#ea580c', pointBorderColor:'#fff', pointRadius:5, pointHoverRadius:7 },
+                { label:'Расходы', data:[d.expense*0.7, d.expense*0.85, d.expense*0.95, d.expense], borderColor:'#ef4444', backgroundColor:'rgba(239,68,68,0.1)', tension:0.4, fill:true, pointBackgroundColor:'#dc2626', pointBorderColor:'#fff', pointRadius:5, pointHoverRadius:7 }
+            ] 
+        }, 
+        options:{ responsive:true, maintainAspectRatio:true, animation:{ duration:1000, easing:'easeOutCubic' }, plugins:{ legend:{ position:'top', labels:{ color:'#ffffff' } } } } 
+    });
+    showBlock('trendBlock');
+}
 
 function showSeasonality() {
     const s = analysisData?.seasonality || {};
@@ -913,7 +1508,6 @@ function showSeasonality() {
 }
 
 function showCost() { showBlock('costBlock'); }
-function showChat() { showBlock('chatBlock'); }
 
 function showClientAnalysis() {
     const d = analysisData;
@@ -933,84 +1527,71 @@ function showClientAnalysis() {
     showBlock('categoriesBlock');
 }
 
-function showCashGap() {
-    const d = analysisData;
-    if (!d.cash_gap_warning) {
-        document.getElementById('seasonalityContent').innerHTML = '<div class="info"><i class="fas fa-check-circle"></i> Прогноз кассовых разрывов: всё стабильно.</div>';
-        showBlock('seasonalityBlock');
-        return;
-    }
-    document.getElementById('seasonalityContent').innerHTML = `
-        <div class="forecast-box" style="background: rgba(239,68,68,0.2); border-left-color: #ef4444;">
-            <h3><i class="fas fa-exclamation-triangle"></i> Предупреждение о кассовом разрыве</h3>
-            <p>${escapeHtml(d.cash_gap_warning)}</p>
-        </div>
-        <div class="info">
-            <i class="fas fa-lightbulb"></i> Рекомендации:
-            <ul style="margin-top: 8px; margin-left: 20px;">
-                <li>Сократите необязательные расходы в ближайший месяц</li>
-                <li>Увеличьте доходы (акции, доп. услуги)</li>
-                <li>Создайте резервный фонд (хотя бы 10% от доходов)</li>
-            </ul>
-        </div>
-    `;
-    showBlock('seasonalityBlock');
+async function showBudget() {
+    await loadBudgets();
+    showBlock('budgetBlock');
 }
 
-function showComparison() {
-    const d = analysisData;
-    const comp = d.comparison || {};
-    
-    if (!comp.has_data) {
-        document.getElementById('reportContent').innerHTML = '<div class="info"><i class="fas fa-chart-line"></i> Нет данных для сравнения с прошлым месяцем. Загрузите выписку за несколько месяцев.</div>';
-        showBlock('fullReport');
-        return;
+async function loadBudgets() {
+    const res = await fetchWithUser('/get-budgets');
+    const budgets = await res.json();
+    const select = document.getElementById('budgetCategory');
+    if (analysisData && analysisData.categories) {
+        select.innerHTML = Object.keys(analysisData.categories).map(cat => `<option value="${cat}">${cat}</option>`).join('');
     }
-    
-    const incomeColor = comp.income_change >= 0 ? '#10b981' : '#ef4444';
-    const incomeIcon = comp.income_change >= 0 ? '📈' : '📉';
-    const expenseColor = comp.expense_change >= 0 ? '#ef4444' : '#10b981';
-    const expenseIcon = comp.expense_change >= 0 ? '📈' : '📉';
-    const profitColor = comp.profit_change >= 0 ? '#10b981' : '#ef4444';
-    const profitIcon = comp.profit_change >= 0 ? '📈' : '📉';
-    
-    document.getElementById('reportContent').innerHTML = `
-        <h3><i class="fas fa-chart-line"></i> Сравнение с прошлым месяцем</h3>
-        <div class="result-stats">
-            <div class="stat-card">
-                <div class="label">💰 Доходы</div>
-                <div class="value" style="font-size: 1.2rem;">${comp.current_income.toFixed(2)} ₽</div>
-                <div class="label" style="margin-top: 5px;">vs ${comp.last_income.toFixed(2)} ₽</div>
-                <div class="value" style="font-size: 1rem; color: ${incomeColor}; margin-top: 5px;">${incomeIcon} ${comp.income_change >= 0 ? '+' : ''}${comp.income_change.toFixed(1)}%</div>
-            </div>
-            <div class="stat-card">
-                <div class="label">💸 Расходы</div>
-                <div class="value" style="font-size: 1.2rem;">${comp.current_expense.toFixed(2)} ₽</div>
-                <div class="label" style="margin-top: 5px;">vs ${comp.last_expense.toFixed(2)} ₽</div>
-                <div class="value" style="font-size: 1rem; color: ${expenseColor}; margin-top: 5px;">${expenseIcon} ${comp.expense_change >= 0 ? '+' : ''}${comp.expense_change.toFixed(1)}%</div>
-            </div>
-            <div class="stat-card">
-                <div class="label">✅ Чистая прибыль</div>
-                <div class="value" style="font-size: 1.2rem;">${comp.current_profit.toFixed(2)} ₽</div>
-                <div class="label" style="margin-top: 5px;">vs ${comp.last_profit.toFixed(2)} ₽</div>
-                <div class="value" style="font-size: 1rem; color: ${profitColor}; margin-top: 5px;">${profitIcon} ${comp.profit_change >= 0 ? '+' : ''}${comp.profit_change.toFixed(1)}%</div>
-            </div>
-        </div>
-        <div class="info">
-            <i class="fas fa-lightbulb"></i> 
-            ${comp.profit_change >= 0 ? '📈 Прибыль выросла! Отличный результат!' : '📉 Прибыль снизилась. Обратите внимание на советы по экономии.'}
-        </div>
-    `;
-    showBlock('fullReport');
+    const listDiv = document.getElementById('budgetList');
+    if (Object.keys(budgets).length === 0) {
+        listDiv.innerHTML = '<p>Лимиты не установлены</p>';
+    } else {
+        listDiv.innerHTML = '<h4>Текущие лимиты:</h4>' + Object.entries(budgets).map(([cat, limit]) => `<div class="info">${cat}: ${limit} ₽</div>`).join('');
+    }
 }
 
-function showBlock(id) {
-    const blocks = ['fullReport','forecastBlock','tipsBlock','categoriesBlock','trendBlock','seasonalityBlock','costBlock','chatBlock'];
-    blocks.forEach(b=>document.getElementById(b).style.display='none');
-    document.getElementById(id).style.display = 'block';
-    if(window.innerWidth<=768 && mobileMenu) mobileMenu.style.display='none';
-    window.scrollTo({ top: document.getElementById(id).offsetTop-20, behavior:'smooth' });
+async function setBudget() {
+    const category = document.getElementById('budgetCategory').value;
+    const limit = document.getElementById('budgetLimit').value;
+    if (!category || !limit) {
+        alert('Заполните все поля');
+        return;
+    }
+    await fetchWithUser('/set-budget', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ category, limit: parseFloat(limit) })
+    });
+    alert('Лимит установлен!');
+    await loadBudgets();
+    location.reload();
 }
+
+async function showHistory() {
+    const res = await fetchWithUser('/history');
+    const history = await res.json();
+    const listDiv = document.getElementById('historyList');
+    if (history.length === 0) {
+        listDiv.innerHTML = '<p>Нет сохранённых анализов</p>';
+    } else {
+        listDiv.innerHTML = history.map(item => `
+            <div class="history-item" onclick="loadHistoryItem(${item.id})">
+                <strong>${item.date.substring(0, 16)}</strong><br>
+                📁 ${item.filename}<br>
+                💰 Доходы: ${item.income.toFixed(2)} ₽ | 💸 Расходы: ${item.expense.toFixed(2)} ₽
+            </div>
+        `).join('');
+    }
+    showBlock('historyBlock');
+}
+
+async function loadHistoryItem(id) {
+    const res = await fetchWithUser(`/history/${id}`);
+    const data = await res.json();
+    analysisData = data;
+    showBudgetAlerts(data.budget_alerts);
+    showSmartSuggestions(data);
+    alert('Загружен анализ от ' + data.date);
+}
+
+function showChat() { showBlock('chatBlock'); }
 
 async function askQuestion() {
     const q = document.getElementById('questionInput').value.trim();
@@ -1022,27 +1603,12 @@ async function askQuestion() {
     chatDiv.innerHTML += `<div class="typing" style="opacity:0.7;font-style:italic;"><i class="fas fa-spinner fa-pulse"></i> ИИ печатает...</div>`;
     chatDiv.scrollTop = chatDiv.scrollHeight;
     try{
-        const res = await fetch('/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:q})});
+        const res = await fetchWithUser('/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:q})});
         const data = await res.json();
         document.querySelector('.typing')?.remove();
         chatDiv.innerHTML += `<div class="chat-message-bot"><span>${escapeHtml(data.answer)}</span></div>`;
         chatDiv.scrollTop = chatDiv.scrollHeight;
-    } catch(e){ document.querySelector('.typing')?.remove(); chatDiv.innerHTML += `<div class="chat-message-bot"><span><i class="fas fa-exclamation-triangle"></i> Ошибка</span></div>`; }
-}
-
-function animateValue(elementId, start, end, duration, suffix) {
-    const element = document.getElementById(elementId);
-    if(!element) return;
-    const range = end - start;
-    const startTime = performance.now();
-    function update(currentTime) {
-        const elapsed = currentTime - startTime;
-        const progress = Math.min(elapsed / duration, 1);
-        const value = start + (range * progress);
-        element.textContent = Math.round(value) + suffix;
-        if(progress < 1) requestAnimationFrame(update);
-    }
-    requestAnimationFrame(update);
+    } catch(e){ document.querySelector('.typing')?.remove(); chatDiv.innerHTML += `<div class="chat-message-bot"><span>Ошибка</span></div>`; }
 }
 
 function calculateCost() {
@@ -1062,31 +1628,38 @@ function calculateCost() {
     resultDiv.style.display = 'block';
     resultDiv.innerHTML = `
         <div class="cost-result-card">
-            <div class="cost-result-header">
-                <i class="fas fa-chart-line"></i> Результаты: ${escapeHtml(name)}
-            </div>
+            <div class="cost-result-header"><i class="fas fa-chart-line"></i> Результаты: ${escapeHtml(name)}</div>
             <div class="cost-result-grid">
-                <div class="cost-result-item">
-                    <div class="cost-result-icon"><i class="fas fa-cubes"></i></div>
-                    <div class="cost-result-label">Себестоимость единицы</div>
-                    <div class="cost-result-value" id="costValue">0 ₽</div>
-                </div>
-                <div class="cost-result-item">
-                    <div class="cost-result-icon"><i class="fas fa-tag"></i></div>
-                    <div class="cost-result-label">Рекомендуемая цена</div>
-                    <div class="cost-result-value" id="priceValue">0 ₽</div>
-                </div>
-                <div class="cost-result-item">
-                    <div class="cost-result-icon"><i class="fas fa-chart-simple"></i></div>
-                    <div class="cost-result-label">Точка безубыточности</div>
-                    <div class="cost-result-value" id="breakevenValue">0 шт./мес</div>
-                </div>
+                <div class="cost-result-item"><div class="cost-result-icon"><i class="fas fa-cubes"></i></div><div class="cost-result-label">Себестоимость единицы</div><div class="cost-result-value" id="costValue">0 ₽</div></div>
+                <div class="cost-result-item"><div class="cost-result-icon"><i class="fas fa-tag"></i></div><div class="cost-result-label">Рекомендуемая цена</div><div class="cost-result-value" id="priceValue">0 ₽</div></div>
+                <div class="cost-result-item"><div class="cost-result-icon"><i class="fas fa-chart-simple"></i></div><div class="cost-result-label">Точка безубыточности</div><div class="cost-result-value" id="breakevenValue">0 шт./мес</div></div>
             </div>
         </div>
     `;
-    animateValue('costValue', 0, cost, 1000, ' ₽');
-    animateValue('priceValue', 0, price, 1000, ' ₽');
-    animateValue('breakevenValue', 0, breakeven, 1000, ' шт./мес');
+    function animateValue(id, start, end, suffix) {
+        const el = document.getElementById(id);
+        if(!el) return;
+        const range = end - start;
+        const startTime = performance.now();
+        function update(currentTime) {
+            const elapsed = currentTime - startTime;
+            const progress = Math.min(elapsed / 1000, 1);
+            el.textContent = Math.round(start + (range * progress)) + suffix;
+            if(progress < 1) requestAnimationFrame(update);
+        }
+        requestAnimationFrame(update);
+    }
+    animateValue('costValue', 0, cost, ' ₽');
+    animateValue('priceValue', 0, price, ' ₽');
+    animateValue('breakevenValue', 0, breakeven, ' шт./мес');
+}
+
+function showBlock(id) {
+    const blocks = ['fullReport','forecastBlock','tipsBlock','categoriesBlock','trendBlock','seasonalityBlock','costBlock','chatBlock','budgetBlock','historyBlock'];
+    blocks.forEach(b=>{ const el = document.getElementById(b); if(el) el.style.display = 'none'; });
+    document.getElementById(id).style.display = 'block';
+    if(window.innerWidth<=768 && mobileMenu) mobileMenu.style.display='none';
+    window.scrollTo({ top: document.getElementById(id).offsetTop-20, behavior:'smooth' });
 }
 
 function escapeHtml(t){ const d=document.createElement('div'); d.textContent=t; return d.innerHTML; }
@@ -1094,9 +1667,9 @@ function escapeHtml(t){ const d=document.createElement('div'); d.textContent=t; 
 const menuBtn=document.getElementById('menuBtn'), mobileMenu=document.getElementById('mobileMenu');
 if(menuBtn && mobileMenu){
     menuBtn.onclick=()=>{ mobileMenu.style.display=mobileMenu.style.display==='none'?'block':'none'; };
-    const items=['Загрузить','Отчёт','Прогноз','Советы','Категории','Динамика','Сезонность','Себестоимость','Клиенты','Кассовые разрывы','Сравнение','Чат'];
+    const items=['Загрузить','Отчёт','Сравнение','Прогноз','Советы','Категории','Динамика','Сезонность','Себестоимость','Клиенты','Бюджет','История','Чат'];
     let html='';
-    for(let i of items) html+=`<a href="#" onclick="if(analysisData){ if('${i}'==='Загрузить') document.querySelector('.upload-area').click(); else if('${i}'==='Отчёт') showFullReport(); else if('${i}'==='Прогноз') showForecast(); else if('${i}'==='Советы') showTips(); else if('${i}'==='Категории') showCategories(); else if('${i}'==='Динамика') showTrend(); else if('${i}'==='Сезонность') showSeasonality(); else if('${i}'==='Себестоимость') showCost(); else if('${i}'==='Клиенты') showClientAnalysis(); else if('${i}'==='Кассовые разрывы') showCashGap(); else if('${i}'==='Сравнение') showComparison(); else if('${i}'==='Чат') showChat(); } else if('${i}'==='Загрузить') document.querySelector('.upload-area').click(); document.getElementById('mobileMenu').style.display='none';">${i}</a>`;
+    for(let i of items) html+=`<a href="#" onclick="if(analysisData){ if('${i}'==='Загрузить') document.querySelector('.upload-area').click(); else if('${i}'==='Отчёт') showFullReport(); else if('${i}'==='Сравнение') showComparison(); else if('${i}'==='Прогноз') showCashGapForecast(); else if('${i}'==='Советы') showTips(); else if('${i}'==='Категории') showCategories(); else if('${i}'==='Динамика') showTrend(); else if('${i}'==='Сезонность') showSeasonality(); else if('${i}'==='Себестоимость') showCost(); else if('${i}'==='Клиенты') showClientAnalysis(); else if('${i}'==='Бюджет') showBudget(); else if('${i}'==='История') showHistory(); else if('${i}'==='Чат') showChat(); } else if('${i}'==='Загрузить') document.querySelector('.upload-area').click(); document.getElementById('mobileMenu').style.display='none';">${i}</a>`;
     mobileMenu.innerHTML=html;
 }
 </script>
