@@ -644,6 +644,17 @@ async def download_template():
         headers={"Content-Disposition": "attachment; filename=cashflow_template.csv"})
 
 
+@app.get("/health")
+async def health():
+    key = os.getenv('DEEPSEEK_API_KEY') or ''
+    return {
+        "deepseek_key_found": bool(key.strip()),
+        "key_length": len(key),
+        "key_has_spaces_or_quotes": key != key.strip() or '"' in key or "'" in key,
+        "client_ready": deepseek_client is not None,
+    }
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
