@@ -264,7 +264,8 @@ def llm_error_text(e):
 category_names = {
     'rent': 'Аренда', 'supplies': 'Сырьё и товары', 'advertising': 'Реклама',
     'taxes': 'Налоги', 'transport': 'Транспорт', 'food': 'Продукты',
-    'cafe': 'Кафе и рестораны', 'education': 'Образование', 'other': 'Прочее'
+    'cafe': 'Кафе и рестораны', 'education': 'Образование', 'salary': 'Зарплата',
+    'utilities': 'Коммунальные и связь', 'equipment': 'Оборудование', 'other': 'Прочее'
 }
 
 _category_cache = {}
@@ -277,9 +278,12 @@ RULES = [
     ('transport', ['такси', 'бензин', 'метро', 'транспорт', 'каршеринг', 'заправка']),
     ('advertising', ['реклама', 'таргет', 'директ', 'продвижение']),
     ('taxes', ['налог', 'фнс', 'штраф', 'взнос']),
-    ('supplies', ['продукты', 'пятерочка', 'магнит', 'лента', 'сырье', 'сырьё', 'закуп']),
+    ('supplies', ['продукты', 'пятерочка', 'магнит', 'лента', 'сырье', 'сырьё', 'закуп', 'упаковк']),
     ('cafe', ['кафе', 'ресторан', 'кофе', 'обед', 'доставка еды']),
     ('education', ['курсы', 'обучение', 'книга']),
+    ('salary', ['зарплат', 'оплата труда', 'заработн']),
+    ('utilities', ['коммунал', 'интернет', 'связь', 'электроэнерг', 'водоснабж', 'жкх']),
+    ('equipment', ['оборудован', 'миксер', 'инструмент', 'станок']),
 ]
 
 
@@ -350,11 +354,12 @@ def parse_file(content: bytes, filename: str) -> pd.DataFrame:
     raise ValueError("Поддерживаются только CSV и Excel файлы")
 
 
-TRANSFER_CATEGORIES = {'финансовые операции', 'переводы', 'перевод'}
+TRANSFER_CATEGORIES = {'финансовые операции', 'переводы', 'перевод', 'пополнения'}
 ORG_MARKERS = re.compile(r'(?:^|\s)(?:ООО|АО|ПАО|ОАО|ЗАО|ИП|НКО|БАНК)(?:\s|$)|["«»\d]|QR', re.I)
 PERSON_SHORT = re.compile(r'^[А-ЯЁ][а-яё\-]+\s[А-ЯЁ]\.$')                         # «Роман Ф.»
 PERSON_FULL = re.compile(r'^[А-ЯЁ][а-яё\-]+(?:\s[А-ЯЁ][а-яё\-]+){1,2}$')           # «Фирсов Роман Сергеевич»
-OWN_ACCOUNT_PHRASES = ('между своими', 'перевод себе', 'на свой счет', 'на свой счёт', 'на свою карту')
+OWN_ACCOUNT_PHRASES = ('между своими', 'перевод себе', 'на свой счет', 'на свой счёт', 'на свою карту',
+                       'внесение наличных', 'пополнение счета', 'пополнение счёта', 'взнос владельца')
 
 
 NOT_PERSON_WORDS = {'такси', 'маркет', 'банк', 'магазин', 'сервис', 'доставка', 'кафе', 'ресторан', 'пицца',
@@ -384,7 +389,8 @@ def detect_transfers(df: pd.DataFrame) -> pd.Series:
     cat_hit = col('category').str.strip().isin(TRANSFER_CATEGORIES)
     merchant = df['merchant'] if 'merchant' in df.columns else pd.Series('', index=df.index)
     person = merchant.apply(looks_like_person)
-    return (own | (person & (cat_hit | generic))).astype(bool)
+    merchant_says_transfer = merchant.fillna('').astype(str).str.lower().str.contains('перевод', regex=False)
+    return (own | ((person | merchant_says_transfer) & (cat_hit | generic))).astype(bool)
 
 
 def normalize(df: pd.DataFrame) -> pd.DataFrame:
@@ -426,12 +432,17 @@ def normalize(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def project(series, i):
-    """Прогноз на i месяцев вперёд."""
-    if len(series) >= 3:
-        x = np.arange(len(series))
-        slope, intercept = np.polyfit(x, series, 1)
-        return max(float(intercept + slope * (len(series) - 1 + i)), 0.0)
-    return float(np.mean(series)) if series else 0.0
+    """Осторожный прогноз на i месяцев вперёд: среднее последних 3 месяцев + ослабленный тренд.
+    Ограничен коридором 50–150% от базы, чтобы 3–4 точки не давали абсурдных значений."""
+    if not series:
+        return 0.0
+    base = float(np.mean(series[-3:]))
+    if len(series) < 3:
+        return base
+    tail = series[-4:]
+    slope = float(np.polyfit(np.arange(len(tail)), tail, 1)[0])
+    value = base + 0.5 * slope * i
+    return float(min(max(value, base * 0.5), base * 1.5))
 
 
 # ============ АНАЛИЗ ============
@@ -460,7 +471,9 @@ def analyze_statement(file_content: bytes, filename: str, user_id: str,
     total_income = float(inc_df['abs_amount'].sum())
     total_expense = float(exp_df['abs_amount'].sum())
     net_profit = total_income - total_expense
-    profitability = (net_profit / total_income * 100) if total_income > 0 else 0
+    profitability = (net_profit / total_income * 100) if total_income > 0 else None
+    if profitability is not None and abs(profitability) > 1000:
+        profitability = None  # доходов почти нет — процент теряет смысл
     avg_check = (total_income / len(inc_df)) if len(inc_df) else 0
 
     # --- даты и месяцы ---
@@ -620,7 +633,7 @@ def analyze_statement(file_content: bytes, filename: str, user_id: str,
         'predicted_total': predicted_total,
         'predicted_change': predicted_change,
         'seasonality': seasonality,
-        'profitability': round(profitability, 1),
+        'profitability': round(profitability, 1) if profitability is not None else None,
         'avg_check': round(avg_check, 2),
         'client_analysis': client_analysis,
         'cash_gap_warning': cash_gap_warning,
@@ -729,7 +742,8 @@ async def ask_question(request: Request, user_id: str = Depends(get_user_id)):
 
     context = (f"Доходы: {last['income']:.2f} ₽\nРасходы: {last['expense']:.2f} ₽\n"
                f"Чистая прибыль: {last['net_profit']:.2f} ₽\n"
-               f"Рентабельность: {last.get('profitability', 0)}%\nРасходы по категориям:\n")
+               f"Рентабельность: {str(last.get('profitability')) + '%' if last.get('profitability') is not None else 'не определена (нет доходов)'}\n"
+               "Расходы по категориям:\n")
     for cat, amount in last.get('categories', {}).items():
         context += f"- {cat}: {amount:.2f} ₽\n"
     tr = last.get('transfers') or {}
