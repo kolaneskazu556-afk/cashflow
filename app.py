@@ -1,5 +1,6 @@
 import os
 import io
+import re
 import time
 import uuid
 import threading
@@ -14,7 +15,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from dotenv import load_dotenv
-from fastapi import FastAPI, UploadFile, File, Request, Depends, Header
+from fastapi import FastAPI, UploadFile, File, Form, Request, Depends, Header
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
@@ -102,20 +103,27 @@ def clean(o):
     return o
 
 
-def save_analysis_to_db(user_id, filename, result):
+def save_analysis_to_db(user_id, filename, result, replace=False):
+    """replace=True — обновить последний анализ этого файла (при смене галочки), а не плодить историю."""
+    values = (
+        result['date'], result.get('income'), result.get('expense'), result.get('net_profit'),
+        json.dumps(result.get('categories', {}), ensure_ascii=False),
+        json.dumps(result.get('months_data', {}), ensure_ascii=False),
+        json.dumps(result.get('forecast_3months', []), ensure_ascii=False),
+        json.dumps(result, ensure_ascii=False),
+    )
     with db() as conn:
-        cur = conn.execute('''
-            INSERT INTO analyses (user_id, date, filename, income, expense, net_profit,
-                                  categories, months_data, forecast, full_data)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (
-            user_id, result['date'], filename,
-            result.get('income'), result.get('expense'), result.get('net_profit'),
-            json.dumps(result.get('categories', {}), ensure_ascii=False),
-            json.dumps(result.get('months_data', {}), ensure_ascii=False),
-            json.dumps(result.get('forecast_3months', []), ensure_ascii=False),
-            json.dumps(result, ensure_ascii=False),
-        ))
+        if replace:
+            row = conn.execute('SELECT id FROM analyses WHERE user_id = ? AND filename = ? '
+                               'ORDER BY id DESC LIMIT 1', (user_id, filename)).fetchone()
+            if row:
+                conn.execute('UPDATE analyses SET date=?, income=?, expense=?, net_profit=?, categories=?, '
+                             'months_data=?, forecast=?, full_data=? WHERE id=?', values + (row[0],))
+                return row[0]
+        cur = conn.execute(
+            'INSERT INTO analyses (user_id, date, filename, income, expense, net_profit, categories, '
+            'months_data, forecast, full_data) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            (user_id, values[0], filename) + values[1:])
         return cur.lastrowid
 
 
@@ -261,7 +269,8 @@ category_names = {
 
 _category_cache = {}
 
-BANK_CAT_MAP = {'Такси': 'Транспорт', 'Фастфуд': 'Кафе и рестораны', 'Прочие расходы': ''}
+BANK_CAT_MAP = {'Такси': 'Транспорт', 'Фастфуд': 'Кафе и рестораны', 'Прочие расходы': '',
+                'Финансовые операции': 'Платежи и сервисы'}
 
 RULES = [
     ('rent', ['аренда', 'офис', 'помещение']),
@@ -341,6 +350,43 @@ def parse_file(content: bytes, filename: str) -> pd.DataFrame:
     raise ValueError("Поддерживаются только CSV и Excel файлы")
 
 
+TRANSFER_CATEGORIES = {'финансовые операции', 'переводы', 'перевод'}
+ORG_MARKERS = re.compile(r'(?:^|\s)(?:ООО|АО|ПАО|ОАО|ЗАО|ИП|НКО|БАНК)(?:\s|$)|["«»\d]|QR', re.I)
+PERSON_SHORT = re.compile(r'^[А-ЯЁ][а-яё\-]+\s[А-ЯЁ]\.$')                         # «Роман Ф.»
+PERSON_FULL = re.compile(r'^[А-ЯЁ][а-яё\-]+(?:\s[А-ЯЁ][а-яё\-]+){1,2}$')           # «Фирсов Роман Сергеевич»
+OWN_ACCOUNT_PHRASES = ('между своими', 'перевод себе', 'на свой счет', 'на свой счёт', 'на свою карту')
+
+
+NOT_PERSON_WORDS = {'такси', 'маркет', 'банк', 'магазин', 'сервис', 'доставка', 'кафе', 'ресторан', 'пицца',
+                    'аптека', 'мобайл', 'пей', 'карт', 'транспорт', 'метро', 'почта', 'оплата', 'платеж', 'платёж'}
+
+
+def looks_like_person(name) -> bool:
+    if name is None or (isinstance(name, float) and math.isnan(name)):
+        return False
+    name = str(name).strip()
+    if not name or name.lower() == 'nan' or ORG_MARKERS.search(name):
+        return False
+    if any(w in NOT_PERSON_WORDS for w in re.split(r'[\s\-]+', name.lower().rstrip('.'))):
+        return False
+    return bool(PERSON_SHORT.match(name) or PERSON_FULL.match(name))
+
+
+def detect_transfers(df: pd.DataFrame) -> pd.Series:
+    """Перевод = между своими счетами, либо человеку/от человека (получатель похож на ФИО
+    и банк называет операцию переводом). Платежи организациям и магазинам переводами не считаем."""
+    def col(name):
+        return df[name].fillna('').astype(str).str.lower() if name in df.columns else pd.Series('', index=df.index)
+
+    text = col('description') + ' ' + col('comment') + ' ' + col('type')
+    own = text.apply(lambda t: any(p in t for p in OWN_ACCOUNT_PHRASES))
+    generic = text.str.contains('перевод', regex=False)
+    cat_hit = col('category').str.strip().isin(TRANSFER_CATEGORIES)
+    merchant = df['merchant'] if 'merchant' in df.columns else pd.Series('', index=df.index)
+    person = merchant.apply(looks_like_person)
+    return (own | (person & (cat_hit | generic))).astype(bool)
+
+
 def normalize(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df.columns = [COLUMN_ALIASES.get(str(c).lower().strip(), str(c).lower().strip()) for c in df.columns]
@@ -362,6 +408,7 @@ def normalize(df: pd.DataFrame) -> pd.DataFrame:
         kind[t.str.contains('пополнен|поступлен|доход', regex=True, na=False)] = 'income'
     df['kind'] = kind
     df['abs_amount'] = df['amount'].abs()
+    df['is_transfer'] = detect_transfers(df)
 
     date_col = next((c for c in df.columns if 'date' in c or 'дата' in c), None)
     df['_date'] = pd.NaT
@@ -388,11 +435,25 @@ def project(series, i):
 
 
 # ============ АНАЛИЗ ============
-def analyze_statement(file_content: bytes, filename: str, user_id: str):
+def analyze_statement(file_content: bytes, filename: str, user_id: str,
+                      exclude_transfers: bool = True, replace: bool = False):
     print(f"📁 Анализ файла: {filename}, {len(file_content)} байт")
     df = normalize(parse_file(file_content, filename))
     if df.empty:
         raise ValueError("В файле нет валидных строк с суммами")
+
+    tmask = df['is_transfer']
+    transfers = {
+        'excluded': bool(exclude_transfers),
+        'expense': float(df.loc[tmask & (df['kind'] == 'expense'), 'abs_amount'].sum()),
+        'income': float(df.loc[tmask & (df['kind'] == 'income'), 'abs_amount'].sum()),
+        'expense_count': int((tmask & (df['kind'] == 'expense')).sum()),
+        'income_count': int((tmask & (df['kind'] == 'income')).sum()),
+    }
+    if exclude_transfers and tmask.any():
+        df = df[~tmask].reset_index(drop=True)
+        if df.empty:
+            raise ValueError("После исключения переводов не осталось операций. Снимите галочку «Не учитывать переводы».")
 
     inc_df = df[df['kind'] == 'income']
     exp_df = df[df['kind'] == 'expense']
@@ -434,6 +495,8 @@ def analyze_statement(file_content: bytes, filename: str, user_id: str):
 
     # если в выписке есть своя колонка category (Альфа, Тинькофф и др.) — берём её
     def bank_cat(row):
+        if 'is_transfer' in row.index and bool(row['is_transfer']):
+            return 'Переводы'
         if 'category' not in row.index or pd.isna(row['category']):
             return ''
         c = str(row['category']).strip()
@@ -568,9 +631,10 @@ def analyze_statement(file_content: bytes, filename: str, user_id: str):
         'budget_alerts': check_budget_alerts(user_id, categories_last_month),
         'months_data': months_data,
         'insights': [],
+        'transfers': transfers,
     }
     result = clean(result)
-    save_analysis_to_db(user_id, filename, result)
+    save_analysis_to_db(user_id, filename, result, replace=replace)
     return result
 
 
@@ -583,12 +647,15 @@ async def home():
 
 
 @app.post("/upload")
-async def upload_file(file: UploadFile = File(...), user_id: str = Depends(get_user_id)):
+async def upload_file(file: UploadFile = File(...), exclude_transfers: str = Form("true"),
+                      replace: str = Form("false"), user_id: str = Depends(get_user_id)):
     try:
         content = await file.read()
         if not content:
             return JSONResponse({'error': 'Файл пуст'}, status_code=400)
-        result = await run_in_threadpool(analyze_statement, content, file.filename, user_id)
+        result = await run_in_threadpool(
+            analyze_statement, content, file.filename, user_id,
+            exclude_transfers.lower() != 'false', replace.lower() == 'true')
         return JSONResponse(result)
     except Exception as e:
         import traceback
@@ -665,6 +732,11 @@ async def ask_question(request: Request, user_id: str = Depends(get_user_id)):
                f"Рентабельность: {last.get('profitability', 0)}%\nРасходы по категориям:\n")
     for cat, amount in last.get('categories', {}).items():
         context += f"- {cat}: {amount:.2f} ₽\n"
+    tr = last.get('transfers') or {}
+    if tr.get('expense_count') or tr.get('income_count'):
+        state = "ИСКЛЮЧЕНЫ из расчётов" if tr.get('excluded') else "учтены в расчётах"
+        context += (f"Переводы людям и между счетами ({state}): расходы {tr.get('expense', 0):.2f} ₽, "
+                    f"доходы {tr.get('income', 0):.2f} ₽\n")
     if last.get('months_data'):
         context += "По месяцам:\n" + "\n".join(
             f"- {m}: доход {v['income']:.0f}, расход {v['expense']:.0f}"
