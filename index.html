@@ -414,6 +414,9 @@
                 <input type="number" id="materialCost" placeholder="Сырьё на 1 ед. (руб)">
                 <input type="number" id="timeMinutes" placeholder="Время на 1 ед. (мин)">
                 <input type="number" id="quantityMonth" placeholder="Количество в месяц">
+                <input type="number" id="laborRate" placeholder="Стоимость вашего часа работы (руб)" value="300">
+                <input type="number" id="overheadMonth" placeholder="Постоянные расходы в месяц: аренда, реклама и т.п. (руб)">
+                <input type="number" id="markupPct" placeholder="Наценка (%)" value="50">
                 <button class="btn" onclick="calculateCost()">Рассчитать</button>
             </div>
             <div id="costResult"></div>
@@ -439,7 +442,7 @@
 // Генерируем уникальный ID для пользователя и сохраняем в браузере
 let userId = localStorage.getItem('cashflow_user_id');
 if (!userId) {
-    userId = 'user_' + Math.random().toString(36).substr(2, 9);
+    userId = 'user_' + (window.crypto && crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2) + Date.now().toString(36));
     localStorage.setItem('cashflow_user_id', userId);
 }
 
@@ -486,8 +489,8 @@ async function uploadFile() {
     let progress = 0; const interval = setInterval(() => { progress += 10; if(progress>=90) clearInterval(interval); progressBar.style.width = Math.min(progress,90)+'%'; }, 200);
     try { 
         const response = await fetchWithUser('/upload',{method:'POST',body:formData}); 
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const result = await response.json(); 
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(result.error || `Ошибка сервера (HTTP ${response.status})`);
         progressBar.style.width='100%'; 
         setTimeout(()=>{progressContainer.style.display='none';},500);
         analysisData = result; 
@@ -585,7 +588,7 @@ async function showCashGapForecast() {
         showBlock('forecastBlock');
         return;
     }
-    let html = '<h3><i class="fas fa-chart-line"></i> Прогноз кассовых разрывов на 3 месяца</h3>';
+    let html = '<h3><i class="fas fa-chart-line"></i> Прогноз кассовых разрывов на 3 месяца</h3><div class="info" style="margin-bottom:1rem;">Прогноз ориентировочный: строится по месяцам из загруженной выписки. Чем больше месяцев данных, тем он надёжнее.</div>';
     for (const m of data.forecast) {
         let riskClass = m.risk_level === 'critical' ? 'risk-critical' : (m.risk_level === 'medium' ? 'risk-medium' : 'risk-low');
         let profitColor = m.profit >= 0 ? '#10b981' : '#ef4444';
@@ -633,19 +636,32 @@ function showCategories() {
 }
 
 function showTrend() {
-    const d = analysisData;
+    const md = (analysisData && analysisData.months_data) || {};
+    const months = Object.keys(md).sort();
+    if (!months.length) {
+        alert('В выписке нет дат, поэтому динамику по месяцам построить нельзя.');
+        return;
+    }
     const ctx = document.getElementById('trendChart').getContext('2d');
-    if(trendChart) trendChart.destroy();
-    trendChart = new Chart(ctx, { 
-        type:'line', 
-        data:{ 
-            labels:['Неделя 1', 'Неделя 2', 'Неделя 3', 'Неделя 4'], 
-            datasets:[
-                { label:'Доходы', data:[d.income*0.6, d.income*0.8, d.income*0.9, d.income], borderColor:'#f97316', backgroundColor:'rgba(249,115,22,0.1)', tension:0.4, fill:true, pointBackgroundColor:'#ea580c', pointBorderColor:'#fff', pointRadius:5, pointHoverRadius:7 },
-                { label:'Расходы', data:[d.expense*0.7, d.expense*0.85, d.expense*0.95, d.expense], borderColor:'#ef4444', backgroundColor:'rgba(239,68,68,0.1)', tension:0.4, fill:true, pointBackgroundColor:'#dc2626', pointBorderColor:'#fff', pointRadius:5, pointHoverRadius:7 }
-            ] 
-        }, 
-        options:{ responsive:true, maintainAspectRatio:true, animation:{ duration:1000, easing:'easeOutCubic' }, plugins:{ legend:{ position:'top', labels:{ color:'#ffffff' } } } } 
+    if (trendChart) trendChart.destroy();
+    const type = months.length >= 2 ? 'line' : 'bar';
+    trendChart = new Chart(ctx, {
+        type,
+        data: {
+            labels: months,
+            datasets: [
+                { label: 'Доходы', data: months.map(m => md[m].income), borderColor: '#f97316', backgroundColor: type === 'bar' ? '#f97316' : 'rgba(249,115,22,0.1)', tension: 0.3, fill: type === 'line', pointRadius: 5 },
+                { label: 'Расходы', data: months.map(m => md[m].expense), borderColor: '#ef4444', backgroundColor: type === 'bar' ? '#ef4444' : 'rgba(239,68,68,0.1)', tension: 0.3, fill: type === 'line', pointRadius: 5 }
+            ]
+        },
+        options: {
+            responsive: true, maintainAspectRatio: true,
+            plugins: {
+                legend: { position: 'top', labels: { color: '#ffffff' } },
+                title: { display: true, color: '#a3a3a3', text: 'Данные по месяцам из загруженной выписки (первый и последний месяцы могут быть неполными)' }
+            },
+            scales: { x: { ticks: { color: '#a3a3a3' } }, y: { ticks: { color: '#a3a3a3' } } }
+        }
     });
     showBlock('trendBlock');
 }
@@ -727,13 +743,13 @@ async function loadBudgets() {
     const budgets = await res.json();
     const select = document.getElementById('budgetCategory');
     if (analysisData && analysisData.categories) {
-        select.innerHTML = Object.keys(analysisData.categories).map(cat => `<option value="${cat}">${cat}</option>`).join('');
+        select.innerHTML = Object.keys(analysisData.categories).map(cat => `<option value="${escapeHtml(cat)}">${escapeHtml(cat)}</option>`).join('');
     }
     const listDiv = document.getElementById('budgetList');
     if (Object.keys(budgets).length === 0) {
         listDiv.innerHTML = '<p>Лимиты не установлены</p>';
     } else {
-        listDiv.innerHTML = '<h4>Текущие лимиты:</h4>' + Object.entries(budgets).map(([cat, limit]) => `<div class="info">${cat}: ${limit} ₽</div>`).join('');
+        listDiv.innerHTML = '<h4>Текущие лимиты:</h4>' + Object.entries(budgets).map(([cat, limit]) => `<div class="info">${escapeHtml(cat)}: ${limit} ₽ в месяц</div>`).join('');
     }
 }
 
@@ -744,14 +760,16 @@ async function setBudget() {
         alert('Заполните все поля');
         return;
     }
-    await fetchWithUser('/set-budget', {
+    const res = await fetchWithUser('/set-budget', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ category, limit: parseFloat(limit) })
     });
-    alert('Лимит установлен!');
+    const out = await res.json().catch(() => ({}));
+    if (!res.ok) { alert(out.error || 'Не удалось сохранить лимит'); return; }
+    document.getElementById('budgetLimit').value = '';
     await loadBudgets();
-    location.reload();
+    alert('Лимит сохранён (в месяц). Предупреждения о превышении появятся при следующем анализе выписки.');
 }
 
 async function showHistory() {
@@ -763,9 +781,9 @@ async function showHistory() {
     } else {
         listDiv.innerHTML = history.map(item => `
             <div class="history-item" onclick="loadHistoryItem(${item.id})">
-                <strong>${item.date.substring(0, 16)}</strong><br>
-                📁 ${item.filename}<br>
-                💰 Доходы: ${item.income.toFixed(2)} ₽ | 💸 Расходы: ${item.expense.toFixed(2)} ₽
+                <strong>${escapeHtml(String(item.date || '').substring(0, 16).replace('T', ' '))}</strong><br>
+                📁 ${escapeHtml(item.filename || '')}<br>
+                💰 Доходы: ${Number(item.income || 0).toFixed(2)} ₽ | 💸 Расходы: ${Number(item.expense || 0).toFixed(2)} ₽
             </div>
         `).join('');
     }
@@ -775,10 +793,15 @@ async function showHistory() {
 async function loadHistoryItem(id) {
     const res = await fetchWithUser(`/history/${id}`);
     const data = await res.json();
+    if (!res.ok || data.error) { alert(data.error || 'Не удалось загрузить анализ'); return; }
     analysisData = data;
     showBudgetAlerts(data.budget_alerts);
     showSmartSuggestions(data);
-    alert('Загружен анализ от ' + data.date);
+    const when = data.date ? String(data.date).substring(0, 16).replace('T', ' ') : '';
+    document.getElementById('insightsContainer').innerHTML =
+        '<div class="insight-item"><i class="fas fa-history" style="color:#f97316;"></i> Загружен сохранённый анализ' +
+        (data.filename ? ': ' + escapeHtml(data.filename) : '') + (when ? ' (' + when + ')' : '') + '</div>';
+    window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
 function showChat() { showBlock('chatBlock'); }
@@ -804,44 +827,34 @@ async function askQuestion() {
 function calculateCost() {
     const name = document.getElementById('productName').value.trim();
     const mat = parseFloat(document.getElementById('materialCost').value);
-    const time = parseInt(document.getElementById('timeMinutes').value);
-    const qty = parseInt(document.getElementById('quantityMonth').value);
-    if(!name || isNaN(mat) || isNaN(time) || isNaN(qty)){ alert('Заполните все поля'); return; }
-    const totalExp = analysisData ? analysisData.expense : 0;
-    const labor = (300/60)*time;
-    const varTotal = mat*qty + labor*qty;
-    const full = varTotal + totalExp;
-    const cost = full/qty;
-    const price = cost*1.5;
-    const breakeven = Math.ceil(totalExp / (price - (mat + labor)));
+    const time = parseFloat(document.getElementById('timeMinutes').value);
+    const qty = parseFloat(document.getElementById('quantityMonth').value);
+    const rate = parseFloat(document.getElementById('laborRate').value);
+    const overhead = parseFloat(document.getElementById('overheadMonth').value) || 0;
+    const markup = parseFloat(document.getElementById('markupPct').value);
+    if (!name || [mat, time, qty, rate, markup].some(isNaN)) { alert('Заполните все поля (постоянные расходы можно оставить пустыми)'); return; }
+    if (qty <= 0 || mat < 0 || time < 0 || rate < 0 || overhead < 0 || markup < 0) { alert('Количество должно быть больше нуля, остальные значения не могут быть отрицательными'); return; }
+
+    const labor = (rate / 60) * time;          // работа на 1 единицу
+    const variable = mat + labor;              // переменные затраты на 1 единицу
+    const cost = variable + overhead / qty;    // полная себестоимость единицы
+    const price = cost * (1 + markup / 100);   // цена с наценкой
+    const margin = price - variable;           // сколько каждая единица приносит на покрытие постоянных расходов
+    const breakeven = margin > 0 ? Math.ceil(overhead / margin) : null;
+
     const resultDiv = document.getElementById('costResult');
     resultDiv.style.display = 'block';
     resultDiv.innerHTML = `
         <div class="cost-result-card">
             <div class="cost-result-header"><i class="fas fa-chart-line"></i> Результаты: ${escapeHtml(name)}</div>
             <div class="cost-result-grid">
-                <div class="cost-result-item"><div class="cost-result-icon"><i class="fas fa-cubes"></i></div><div class="cost-result-label">Себестоимость единицы</div><div class="cost-result-value" id="costValue">0 ₽</div></div>
-                <div class="cost-result-item"><div class="cost-result-icon"><i class="fas fa-tag"></i></div><div class="cost-result-label">Рекомендуемая цена</div><div class="cost-result-value" id="priceValue">0 ₽</div></div>
-                <div class="cost-result-item"><div class="cost-result-icon"><i class="fas fa-chart-simple"></i></div><div class="cost-result-label">Точка безубыточности</div><div class="cost-result-value" id="breakevenValue">0 шт./мес</div></div>
+                <div class="cost-result-item"><div class="cost-result-icon"><i class="fas fa-cubes"></i></div><div class="cost-result-label">Себестоимость единицы</div><div class="cost-result-value">${cost.toFixed(2)} ₽</div></div>
+                <div class="cost-result-item"><div class="cost-result-icon"><i class="fas fa-tag"></i></div><div class="cost-result-label">Цена с наценкой ${markup}%</div><div class="cost-result-value">${price.toFixed(2)} ₽</div></div>
+                <div class="cost-result-item"><div class="cost-result-icon"><i class="fas fa-chart-simple"></i></div><div class="cost-result-label">Точка безубыточности</div><div class="cost-result-value">${breakeven === null ? '—' : breakeven + ' шт./мес'}</div></div>
             </div>
+            <div class="info">Переменные затраты на единицу: ${variable.toFixed(2)} ₽ (сырьё ${mat.toFixed(2)} ₽ + работа ${labor.toFixed(2)} ₽).${overhead > 0 ? ' Постоянные расходы ' + overhead.toFixed(0) + ' ₽ распределены на ' + qty + ' шт.' : ' Постоянные расходы не учтены.'}</div>
         </div>
     `;
-    function animateValue(id, start, end, suffix) {
-        const el = document.getElementById(id);
-        if(!el) return;
-        const range = end - start;
-        const startTime = performance.now();
-        function update(currentTime) {
-            const elapsed = currentTime - startTime;
-            const progress = Math.min(elapsed / 1000, 1);
-            el.textContent = Math.round(start + (range * progress)) + suffix;
-            if(progress < 1) requestAnimationFrame(update);
-        }
-        requestAnimationFrame(update);
-    }
-    animateValue('costValue', 0, cost, ' ₽');
-    animateValue('priceValue', 0, price, ' ₽');
-    animateValue('breakevenValue', 0, breakeven, ' шт./мес');
 }
 
 function showBlock(id) {
