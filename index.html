@@ -388,6 +388,12 @@
         </div>
         <div id="fileName" class="info" style="display:none;"></div>
         <div class="progress-container" id="progressContainer"><div class="progress-bar" id="progressBar"></div></div>
+        <label style="display:flex; align-items:flex-start; gap:10px; margin-top:1rem; cursor:pointer; font-size:0.9rem;">
+            <input type="checkbox" id="excludeTransfers" checked style="margin-top:3px; accent-color:#f97316; width:18px; height:18px; flex-shrink:0;">
+            <span>Не учитывать переводы между людьми и счетами
+                <span style="display:block; font-size:0.75rem; color:var(--text-secondary);">Выключите, если клиенты платят вам переводами на карту: иначе эти поступления не попадут в доход.</span>
+            </span>
+        </label>
         <div style="display: flex; gap: 10px; margin-top: 1rem;">
             <button class="btn" id="analyzeBtn" onclick="uploadFile()" disabled style="flex: 1;">📊 Анализировать</button>
             <a href="/download-template" download class="btn" style="flex: 0; background: #2a2a2a; border: 1px solid #f97316; text-decoration: none; display: inline-flex; align-items: center; justify-content: center;">📥 Шаблон CSV</a>
@@ -478,11 +484,13 @@ dropZone.ondrop = (e) => {
     } 
 };
 
-async function uploadFile() {
+async function uploadFile(isRecalc) {
     if(!selectedFile) return;
     
     const formData = new FormData();
     formData.append('file', selectedFile);
+    formData.append('exclude_transfers', document.getElementById('excludeTransfers').checked ? 'true' : 'false');
+    formData.append('replace', isRecalc === true ? 'true' : 'false');
     progressContainer.style.display = 'block'; progressBar.style.width = '0%';
     document.getElementById('loading').style.display = 'block';
     document.getElementById('resultContainer').style.display = 'none';
@@ -504,6 +512,22 @@ async function uploadFile() {
     finally{ clearInterval(interval); document.getElementById('loading').style.display='none'; }
 }
 
+document.getElementById('excludeTransfers').addEventListener('change', () => {
+    // пересчитываем сразу, если анализ уже сделан по этому же файлу
+    if (selectedFile && analysisData && analysisData.filename === selectedFile.name) uploadFile(true);
+});
+
+function transferNote(d) {
+    const t = d && d.transfers;
+    if (!t || (!t.expense_count && !t.income_count)) return '';
+    const fmt = n => Number(n || 0).toLocaleString('ru-RU', { maximumFractionDigits: 0 });
+    const parts = [];
+    if (t.expense_count) parts.push(`расходы ${fmt(t.expense)} ₽ (${t.expense_count} оп.)`);
+    if (t.income_count) parts.push(`доходы ${fmt(t.income)} ₽ (${t.income_count} оп.)`);
+    return `<div class="info" style="margin-top:0.7rem;"><i class="fas fa-right-left"></i> Переводы людям и между счетами: ${parts.join(' и ')} — ` +
+           (t.excluded ? '<b>не учитываются</b> в расчётах.' : '<b>учитываются</b> в расчётах как обычные операции.') + '</div>';
+}
+
 function showBudgetAlerts(alerts) {
     const container = document.getElementById('budgetAlerts');
     if (!alerts || alerts.length === 0) {
@@ -516,7 +540,7 @@ function showBudgetAlerts(alerts) {
 }
 
 function showSmartSuggestions(data) {
-    document.getElementById('insightsContainer').innerHTML = '<div class="insight-item"><i class="fas fa-check-circle" style="color:#f97316;"></i> Анализ выполнен успешно</div>';
+    document.getElementById('insightsContainer').innerHTML = '<div class="insight-item"><i class="fas fa-check-circle" style="color:#f97316;"></i> Анализ выполнен успешно</div>' + transferNote(data);
     const allButtons = [
         { key:'full', text:'📈 Полный отчёт', func:showFullReport },
         { key:'comparison', text:'📊 Сравнение с прошлым месяцем', func:showComparison },
@@ -552,6 +576,7 @@ function showFullReport() {
             <div class="stat-card"><div class="value">${d.avg_check.toFixed(2)} ₽</div><div class="label">💰 Средний чек</div></div>
         </div>
         <div class="info"><i class="fas fa-info-circle"></i> Обработано строк: ${d.rows_count}<br><i class="fas fa-arrow-up"></i> Доходов: ${d.incomes_count}, <i class="fas fa-arrow-down"></i> Расходов: ${d.expenses_count}</div>
+        ${transferNote(d)}
         ${d.cash_gap_warning ? `<div class="info" style="background: rgba(239,68,68,0.2); color: #ef4444;"><i class="fas fa-exclamation-triangle"></i> ${d.cash_gap_warning}</div>` : ''}
     `;
     showBlock('fullReport');
@@ -623,7 +648,7 @@ function showCategories() {
     if(d.categories && Object.keys(d.categories).length){
         let table = '<h3><i class="fas fa-tags"></i> Расходы по категориям</h3><table style="width:100%"><tr><th>Категория</th><th>Сумма (RUB)</th></tr>';
         for(const [cat,amt] of Object.entries(d.categories)){
-            const icon = {'Аренда':'🏠','Сырьё и товары':'📦','Реклама':'📢','Налоги':'📄','Транспорт':'🚗','Продукты':'🍎','Кафе и рестораны':'🍽️','Образование':'📚','Прочее':'📌'}[cat] || '💰';
+            const icon = {'Аренда':'🏠','Сырьё и товары':'📦','Реклама':'📢','Налоги':'📄','Транспорт':'🚗','Продукты':'🍎','Кафе и рестораны':'🍽️','Образование':'📚','Прочее':'📌','Переводы':'🔁','Платежи и сервисы':'💳','Табак':'🚬','Выдача наличных':'💵','Связь, интернет и ТВ':'📱','Цифровые товары':'🎮'}[cat] || '💰';
             table += `<tr><td><span class="category-icon">${icon}</span> ${cat}</td><td style="text-align:right">${amt.toFixed(2)} ₽</td></tr>`;
         }
         table += '</table>';
@@ -800,7 +825,7 @@ async function loadHistoryItem(id) {
     const when = data.date ? String(data.date).substring(0, 16).replace('T', ' ') : '';
     document.getElementById('insightsContainer').innerHTML =
         '<div class="insight-item"><i class="fas fa-history" style="color:#f97316;"></i> Загружен сохранённый анализ' +
-        (data.filename ? ': ' + escapeHtml(data.filename) : '') + (when ? ' (' + when + ')' : '') + '</div>';
+        (data.filename ? ': ' + escapeHtml(data.filename) : '') + (when ? ' (' + when + ')' : '') + '</div>' + transferNote(data);
     window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
