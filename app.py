@@ -773,8 +773,11 @@ async def ask_question(request: Request, user_id: str = Depends(get_user_id)):
 
 
 def read_demo_bytes():
-    """Содержимое демо-выписки или None, если файла нет рядом с app.py."""
-    return DEMO_PATH.read_bytes() if DEMO_PATH.exists() else None
+    """Демо-выписка: файл demo_statement.csv рядом с app.py, а если его нет — вшитая копия."""
+    if DEMO_PATH.exists():
+        return DEMO_PATH.read_bytes()
+    import base64, zlib
+    return zlib.decompress(base64.b64decode("".join(DEMO_CSV_B64.split())))
 
 
 @app.get("/demo-statement")
@@ -824,6 +827,43 @@ async def health_llm():
         return {"token_ok": True}
     except Exception as e:
         return {"token_ok": False, "error": llm_error_text(e)}
+
+
+# Демо-выписка (вымышленная кондитерская), сжатая zlib + base64. Нужна кнопке «Попробовать на примере».
+DEMO_CSV_B64 = """
+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
+"""
 
 
 if __name__ == "__main__":
