@@ -35,6 +35,7 @@ app.add_middleware(
 
 DB_PATH = os.getenv("DB_PATH", "cashflow_v2.db")
 INDEX_PATH = Path(__file__).with_name("index.html")
+DEMO_PATH = Path(__file__).with_name("demo_statement.csv")
 MAX_AI_CALLS_PER_UPLOAD = 25
 
 
@@ -769,6 +770,20 @@ async def ask_question(request: Request, user_id: str = Depends(get_user_id)):
         return JSONResponse({'answer': answer})
     except Exception as e:
         return JSONResponse({'answer': llm_error_text(e)})
+
+
+def read_demo_bytes():
+    """Содержимое демо-выписки или None, если файла нет рядом с app.py."""
+    return DEMO_PATH.read_bytes() if DEMO_PATH.exists() else None
+
+
+@app.get("/demo-statement")
+async def demo_statement():
+    data = read_demo_bytes()
+    if data is None:
+        return JSONResponse({'error': 'Файл demo_statement.csv не найден на сервере'}, status_code=404)
+    return StreamingResponse(io.BytesIO(data), media_type="text/csv",
+                             headers={"Content-Disposition": "attachment; filename=demo_statement.csv"})
 
 
 @app.get("/download-template")
