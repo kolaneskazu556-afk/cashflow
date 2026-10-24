@@ -398,6 +398,10 @@
             <button class="btn" id="analyzeBtn" onclick="uploadFile()" disabled style="flex: 1;">📊 Анализировать</button>
             <a href="/download-template" download class="btn" style="flex: 0; background: #2a2a2a; border: 1px solid #f97316; text-decoration: none; display: inline-flex; align-items: center; justify-content: center;">📥 Шаблон CSV</a>
         </div>
+        <div style="text-align:center; margin-top:1rem;">
+            <button class="suggestion-btn" id="demoBtn" onclick="loadDemo()">✨ Попробовать на примере</button>
+            <div style="font-size:0.75rem; color:var(--text-secondary); margin-top:6px;">Вымышленная кондитерская за 4 месяца: посмотрите, как всё работает, без загрузки своих данных</div>
+        </div>
     </div>
     <div id="loading" style="display:none;text-align:center;padding:2rem;"><div class="spinner"></div><p>Анализирую выписку с помощью ИИ...</p></div>
     <div id="resultContainer" style="display:none;">
@@ -528,6 +532,34 @@ function transferNote(d) {
            (t.excluded ? '<b>не учитываются</b> в расчётах.' : '<b>учитываются</b> в расчётах как обычные операции.') + '</div>';
 }
 
+const DEMO_FILENAME = 'demo_statement.csv';
+
+async function loadDemo() {
+    const btn = document.getElementById('demoBtn');
+    btn.disabled = true;
+    try {
+        const res = await fetchWithUser('/demo-statement');
+        if (!res.ok) throw new Error('Файл примера не найден на сервере (demo_statement.csv)');
+        const blob = await res.blob();
+        selectedFile = new File([blob], DEMO_FILENAME, { type: 'text/csv' });
+        fileNameDiv.textContent = 'Пример: демо-выписка кондитерской (вымышленные данные)';
+        fileNameDiv.style.display = 'block';
+        analyzeBtn.disabled = false;
+        await uploadFile();
+    } catch (e) {
+        alert(e.message);
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+function demoNote(d) {
+    if (!d || d.filename !== DEMO_FILENAME) return '';
+    return '<div class="info" style="margin-top:0.7rem;"><i class="fas fa-flask"></i> Это <b>демо-данные</b> вымышленной кондитерской. ' +
+           'Чтобы увидеть свои цифры, загрузите свою выписку. ' +
+           '<button class="suggestion-btn" style="margin-top:8px;" onclick="document.querySelector(\'.upload-area\').scrollIntoView({behavior:\'smooth\', block:\'center\'})">📤 Загрузить свою выписку</button></div>';
+}
+
 function showBudgetAlerts(alerts) {
     const container = document.getElementById('budgetAlerts');
     if (!alerts || alerts.length === 0) {
@@ -540,7 +572,7 @@ function showBudgetAlerts(alerts) {
 }
 
 function showSmartSuggestions(data) {
-    document.getElementById('insightsContainer').innerHTML = '<div class="insight-item"><i class="fas fa-check-circle" style="color:#f97316;"></i> Анализ выполнен успешно</div>' + transferNote(data);
+    document.getElementById('insightsContainer').innerHTML = '<div class="insight-item"><i class="fas fa-check-circle" style="color:#f97316;"></i> Анализ выполнен успешно</div>' + transferNote(data) + demoNote(data);
     const allButtons = [
         { key:'full', text:'📈 Полный отчёт', func:showFullReport },
         { key:'comparison', text:'📊 Сравнение с прошлым месяцем', func:showComparison },
@@ -825,7 +857,7 @@ async function loadHistoryItem(id) {
     const when = data.date ? String(data.date).substring(0, 16).replace('T', ' ') : '';
     document.getElementById('insightsContainer').innerHTML =
         '<div class="insight-item"><i class="fas fa-history" style="color:#f97316;"></i> Загружен сохранённый анализ' +
-        (data.filename ? ': ' + escapeHtml(data.filename) : '') + (when ? ' (' + when + ')' : '') + '</div>' + transferNote(data);
+        (data.filename ? ': ' + escapeHtml(data.filename) : '') + (when ? ' (' + when + ')' : '') + '</div>' + transferNote(data) + demoNote(data);
     window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
