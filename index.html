@@ -642,6 +642,7 @@ function showSmartSuggestions(data) {
         { key:'savings', text:'💡 Советы', func:showTips },
         { key:'categories', text:'📊 Категории', func:showCategories },
         { key:'catedit', text:'✏️ Поправить категории', func:showCategoryEditor },
+        { key:'pdf', text:'📄 Отчёт в PDF', func:printReport },
         { key:'trend', text:'📈 Динамика', func:showTrend },
         { key:'seasonality', text:'📅 Сезонность', func:showSeasonality },
         { key:'cost', text:'💰 Себестоимость', func:showCost },
@@ -1078,6 +1079,73 @@ async function recalcAfterRules() {
         alert('Правила сохранены. Они применятся при следующей загрузке выписки.');
     }
     showCategoryEditor();
+}
+
+function buildReportHtml(d) {
+    const e = escapeHtml;
+    const fmt = n => Number(n || 0).toLocaleString('ru-RU', { maximumFractionDigits: 0 }) + ' ₽';
+    const sgn = n => (n < 0 ? 'neg' : '');
+    const risk = { low: 'Низкий', medium: 'Средний', critical: 'Критический' };
+    const months = Object.keys(d.months_data || {}).sort();
+    const cats = Object.entries(d.categories || {}).sort((a, b) => b[1] - a[1]);
+    const t = d.transfers || {};
+    const when = d.date ? String(d.date).substring(0, 10) : new Date().toISOString().substring(0, 10);
+    const row = cells => '<tr>' + cells.join('') + '</tr>';
+    let html = `<h1>Финансовый отчёт CashFlow</h1>
+<p class="muted">Файл: ${e(d.filename || '—')} · Дата анализа: ${e(when)}${months.length ? ' · Период: ' + e(months[0]) + ' — ' + e(months[months.length - 1]) : ''}</p>
+<h2>Итоги</h2><table>
+${row(['<td>Доходы</td>', `<td class="r">${fmt(d.income)}</td>`])}
+${row(['<td>Расходы</td>', `<td class="r">${fmt(d.expense)}</td>`])}
+${row(['<td><b>Чистая прибыль</b></td>', `<td class="r ${sgn(d.net_profit)}"><b>${fmt(d.net_profit)}</b></td>`])}
+${row(['<td>Рентабельность</td>', `<td class="r">${d.profitability === null || d.profitability === undefined ? '—' : d.profitability + '%'}</td>`])}
+${row(['<td>Средний чек</td>', `<td class="r">${fmt(d.avg_check)}</td>`])}
+${row(['<td>Операций (доходных / расходных)</td>', `<td class="r">${d.incomes_count || 0} / ${d.expenses_count || 0}</td>`])}
+</table>`;
+    if (t.expense_count || t.income_count) {
+        html += `<p class="muted">Переводы между людьми и счетами (расходы ${fmt(t.expense)}, доходы ${fmt(t.income)}) ${t.excluded ? 'не учтены' : 'учтены'} в расчётах.</p>`;
+    }
+    if (d.cash_gap_warning) html += `<p class="warn">${e(d.cash_gap_warning.replace(/^⚠️\s*/, ''))}</p>`;
+    if (months.length) {
+        html += '<h2>По месяцам</h2><table><tr><th>Месяц</th><th class="r">Доходы</th><th class="r">Расходы</th><th class="r">Прибыль</th></tr>' +
+            months.map(m => { const v = d.months_data[m]; return row([`<td>${e(m)}</td>`, `<td class="r">${fmt(v.income)}</td>`, `<td class="r">${fmt(v.expense)}</td>`, `<td class="r ${sgn(v.profit)}">${fmt(v.profit)}</td>`]); }).join('') + '</table>';
+    }
+    if (cats.length) {
+        html += '<h2>Расходы по категориям</h2><table><tr><th>Категория</th><th class="r">Сумма</th><th class="r">Доля</th></tr>' +
+            cats.map(([c, a]) => row([`<td>${e(c)}</td>`, `<td class="r">${fmt(a)}</td>`, `<td class="r">${d.expense ? Math.round(a / d.expense * 100) : 0}%</td>`])).join('') + '</table>';
+    }
+    if ((d.budget_alerts || []).length) {
+        html += '<h2>Превышения лимитов</h2><ul>' + d.budget_alerts.map(a => `<li>${e(String(a.message || '').replace(/^⚠️\s*/, ''))}</li>`).join('') + '</ul>';
+    }
+    if ((d.forecast_3months || []).length) {
+        html += '<h2>Прогноз на 3 месяца (ориентировочный)</h2><table><tr><th>Месяц вперёд</th><th class="r">Доходы</th><th class="r">Расходы</th><th class="r">Прибыль</th><th>Риск</th></tr>' +
+            d.forecast_3months.map(m => row([`<td>+${m.month}</td>`, `<td class="r">${fmt(m.income)}</td>`, `<td class="r">${fmt(m.expense)}</td>`, `<td class="r ${sgn(m.profit)}">${fmt(m.profit)}</td>`, `<td>${e(risk[m.risk_level] || '')}</td>`])).join('') + '</table>';
+    }
+    const tips = String(d.tips || '').split('•').map(x => x.trim()).filter(Boolean);
+    if (tips.length) html += '<h2>Советы по экономии</h2><ul>' + tips.map(x => `<li>${e(x)}</li>`).join('') + '</ul>';
+    html += '<p class="muted foot">Отчёт сформирован автоматически сервисом CashFlow на основе загруженной выписки. Категории определены автоматически и могут содержать ошибки, прогноз носит ориентировочный характер. Не является бухгалтерской или налоговой консультацией.</p>';
+    return `<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8"><title>CashFlow — отчёт</title><style>
+@page { margin: 14mm; }
+body { font-family: Arial, Helvetica, sans-serif; color: #111; font-size: 12px; line-height: 1.45; }
+h1 { font-size: 20px; margin: 0 0 4px; } h2 { font-size: 14px; margin: 18px 0 6px; border-bottom: 1px solid #ccc; padding-bottom: 3px; }
+table { width: 100%; border-collapse: collapse; } td, th { padding: 4px 6px; border-bottom: 1px solid #e5e5e5; text-align: left; }
+th { background: #f3f3f3; } .r { text-align: right; white-space: nowrap; } .neg { color: #b91c1c; }
+.muted { color: #666; } .warn { background: #fef2f2; border-left: 3px solid #b91c1c; padding: 6px 10px; } .foot { margin-top: 20px; font-size: 10px; }
+tr { page-break-inside: avoid; }
+</style></head><body>${html}</body></html>`;
+}
+
+function printReport() {
+    if (!analysisData) { alert('Сначала загрузите и проанализируйте выписку'); return; }
+    const frame = document.createElement('iframe');
+    frame.style.cssText = 'position:fixed; right:0; bottom:0; width:0; height:0; border:0;';
+    document.body.appendChild(frame);
+    const doc = frame.contentWindow.document;
+    doc.open(); doc.write(buildReportHtml(analysisData)); doc.close();
+    setTimeout(() => {
+        frame.contentWindow.focus();
+        frame.contentWindow.print();
+        setTimeout(() => frame.remove(), 1500);
+    }, 300);
 }
 
 function showBlock(id) {
