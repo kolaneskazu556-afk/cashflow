@@ -450,6 +450,7 @@
             <div id="budgetAlerts"></div>
             <div id="insightsContainer"></div>
             <div id="suggestionButtons" class="suggestion-buttons"></div>
+            <div id="pdfStatus" class="info" style="display:none; margin-top:0.8rem;"></div>
         </div>
         <div id="fullReport" class="card" style="display:none;"><div id="reportContent"></div></div>
         <div id="forecastBlock" class="card" style="display:none;"><div id="forecastContent"></div></div>
@@ -642,7 +643,7 @@ function showSmartSuggestions(data) {
         { key:'savings', text:'💡 Советы', func:showTips },
         { key:'categories', text:'📊 Категории', func:showCategories },
         { key:'catedit', text:'✏️ Поправить категории', func:showCategoryEditor },
-        { key:'pdf', text:'📄 Отчёт в PDF', func:printReport },
+        { key:'pdf', text:'📄 Скачать PDF', func:downloadPdf },
         { key:'trend', text:'📈 Динамика', func:showTrend },
         { key:'seasonality', text:'📅 Сезонность', func:showSeasonality },
         { key:'cost', text:'💰 Себестоимость', func:showCost },
@@ -1132,6 +1133,120 @@ th { background: #f3f3f3; } .r { text-align: right; white-space: nowrap; } .neg 
 .muted { color: #666; } .warn { background: #fef2f2; border-left: 3px solid #b91c1c; padding: 6px 10px; } .foot { margin-top: 20px; font-size: 10px; }
 tr { page-break-inside: avoid; }
 </style></head><body>${html}</body></html>`;
+}
+
+// ---------- Настоящий PDF-файл (библиотека pdfmake грузится только по клику) ----------
+const PDFMAKE_BASES = ['https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.7/', 'https://cdn.jsdelivr.net/npm/pdfmake@0.2.7/build/'];
+let pdfLibPromise = null;
+
+function loadScript(src) {
+    return new Promise((resolve, reject) => {
+        const s = document.createElement('script');
+        s.src = src; s.onload = resolve; s.onerror = () => reject(new Error('не загрузился ' + src));
+        document.head.appendChild(s);
+    });
+}
+
+function loadPdfLib() {
+    if (window.pdfMake && window.pdfMake.vfs) return Promise.resolve();
+    if (!pdfLibPromise) {
+        pdfLibPromise = (async () => {
+            let lastErr;
+            for (const base of PDFMAKE_BASES) {
+                try { await loadScript(base + 'pdfmake.min.js'); await loadScript(base + 'vfs_fonts.js'); return; }
+                catch (e) { lastErr = e; }
+            }
+            throw lastErr || new Error('нет доступа к библиотеке PDF');
+        })().catch(e => { pdfLibPromise = null; throw e; });
+    }
+    return pdfLibPromise;
+}
+
+function buildPdfDoc(d) {
+    // В PDF не используем ₽, неразрывные пробелы и «−»: в шрифте Roboto из pdfmake они могут отображаться квадратиками
+    const clean = s => String(s).replace(/\u20bd/g, 'руб.').replace(/[\u00a0\u202f]/g, ' ').replace(/[\u2212]/g, '-').replace(/\ufe0f/g, '');
+    const money = n => clean(Number(n || 0).toLocaleString('ru-RU', { maximumFractionDigits: 0 })) + ' руб.';
+    const RED = '#b91c1c';
+    const c = (text, right, neg) => ({ text: String(text), alignment: right ? 'right' : 'left', color: neg ? RED : undefined });
+    const th = (text, right) => ({ text, bold: true, fillColor: '#f1f1f1', alignment: right ? 'right' : 'left' });
+    const table = (heads, rows, widths) => ({
+        table: { headerRows: 1, widths, body: [heads.map(([t, r]) => th(t, r)), ...rows] },
+        layout: 'lightHorizontalLines', margin: [0, 0, 0, 6]
+    });
+    const risk = { low: 'Низкий', medium: 'Средний', critical: 'Критический' };
+    const months = Object.keys(d.months_data || {}).sort();
+    const cats = Object.entries(d.categories || {}).sort((a, b) => b[1] - a[1]);
+    const t = d.transfers || {};
+    const when = d.date ? String(d.date).substring(0, 10) : new Date().toISOString().substring(0, 10);
+    const content = [
+        { text: 'Финансовый отчёт CashFlow', fontSize: 18, bold: true },
+        { text: clean(`Файл: ${d.filename || '-'}  |  Дата анализа: ${when}` + (months.length ? `  |  Период: ${months[0]} - ${months[months.length - 1]}` : '')), color: '#666', fontSize: 9, margin: [0, 2, 0, 8] },
+        { text: 'Итоги', style: 'h2' },
+        table([['Показатель'], ['Значение', true]], [
+            [c('Доходы'), c(money(d.income), true)],
+            [c('Расходы'), c(money(d.expense), true)],
+            [{ text: 'Чистая прибыль', bold: true }, { text: money(d.net_profit), bold: true, alignment: 'right', color: d.net_profit < 0 ? RED : undefined }],
+            [c('Рентабельность'), c(d.profitability === null || d.profitability === undefined ? '-' : d.profitability + '%', true)],
+            [c('Средний чек'), c(money(d.avg_check), true)],
+            [c('Операций (доходных / расходных)'), c(`${d.incomes_count || 0} / ${d.expenses_count || 0}`, true)]
+        ], ['*', 'auto'])
+    ];
+    if (t.expense_count || t.income_count) {
+        content.push({ text: `Переводы между людьми и счетами (расходы ${money(t.expense)}, доходы ${money(t.income)}) ${t.excluded ? 'не учтены' : 'учтены'} в расчётах.`, color: '#666', fontSize: 9, margin: [0, 0, 0, 4] });
+    }
+    if (d.cash_gap_warning) content.push({ text: clean(String(d.cash_gap_warning).replace(/^\u26a0\ufe0f?\s*/, '')), color: RED, margin: [0, 2, 0, 4] });
+    if (months.length) {
+        content.push({ text: 'По месяцам', style: 'h2' });
+        content.push(table([['Месяц'], ['Доходы', true], ['Расходы', true], ['Прибыль', true]],
+            months.map(m => { const v = d.months_data[m]; return [c(m), c(money(v.income), true), c(money(v.expense), true), c(money(v.profit), true, v.profit < 0)]; }),
+            ['*', 'auto', 'auto', 'auto']));
+    }
+    if (cats.length) {
+        content.push({ text: 'Расходы по категориям', style: 'h2' });
+        content.push(table([['Категория'], ['Сумма', true], ['Доля', true]],
+            cats.map(([name, amt]) => [c(name), c(money(amt), true), c((d.expense ? Math.round(amt / d.expense * 100) : 0) + '%', true)]),
+            ['*', 'auto', 'auto']));
+    }
+    if ((d.budget_alerts || []).length) {
+        content.push({ text: 'Превышения лимитов', style: 'h2' });
+        content.push({ ul: d.budget_alerts.map(a => clean(String(a.message || '').replace(/^\u26a0\ufe0f?\s*/, ''))), margin: [0, 0, 0, 6] });
+    }
+    if ((d.forecast_3months || []).length) {
+        content.push({ text: 'Прогноз на 3 месяца (ориентировочный)', style: 'h2' });
+        content.push(table([['Месяц вперёд'], ['Доходы', true], ['Расходы', true], ['Прибыль', true], ['Риск']],
+            d.forecast_3months.map(m => [c('+' + m.month), c(money(m.income), true), c(money(m.expense), true), c(money(m.profit), true, m.profit < 0), c(risk[m.risk_level] || '-')]),
+            ['auto', '*', '*', '*', 'auto']));
+    }
+    const tips = String(d.tips || '').split('\u2022').map(x => clean(x.trim())).filter(Boolean);
+    if (tips.length) {
+        content.push({ text: 'Советы по экономии', style: 'h2' });
+        content.push({ ul: tips, margin: [0, 0, 0, 6] });
+    }
+    content.push({ text: 'Отчёт сформирован автоматически сервисом CashFlow на основе загруженной выписки. Категории определены автоматически и могут содержать ошибки, прогноз носит ориентировочный характер. Не является бухгалтерской или налоговой консультацией.', color: '#888', fontSize: 8, margin: [0, 14, 0, 0] });
+    return {
+        pageSize: 'A4', pageMargins: [40, 40, 40, 50],
+        defaultStyle: { font: 'Roboto', fontSize: 10 },
+        styles: { h2: { fontSize: 13, bold: true, margin: [0, 12, 0, 5] } },
+        footer: (page, pages) => ({ text: `${page} / ${pages}`, alignment: 'center', fontSize: 8, color: '#888', margin: [0, 15, 0, 0] }),
+        content
+    };
+}
+
+async function downloadPdf() {
+    if (!analysisData) { alert('Сначала загрузите и проанализируйте выписку'); return; }
+    const st = document.getElementById('pdfStatus');
+    const show = (msg, bad) => { st.style.display = 'block'; st.style.color = bad ? '#ef4444' : ''; st.textContent = msg; };
+    show('Готовлю PDF…');
+    try {
+        await loadPdfLib();
+        const day = (analysisData.date ? String(analysisData.date) : new Date().toISOString()).substring(0, 10);
+        window.pdfMake.createPdf(buildPdfDoc(analysisData)).download(`cashflow_report_${day}.pdf`);
+        show('PDF сформирован. Если файл не появился, проверьте папку «Загрузки».');
+        setTimeout(() => { st.style.display = 'none'; }, 7000);
+    } catch (e) {
+        show('Не удалось сформировать PDF (' + (e.message || e) + '). Проверьте интернет и попробуйте ещё раз.', true);
+        if (!('ontouchstart' in window)) printReport();   // на компьютере хотя бы откроем печать
+    }
 }
 
 function printReport() {
