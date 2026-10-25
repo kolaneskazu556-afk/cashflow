@@ -4,7 +4,22 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
-    <title>CashFlow — ИИ финансовый ассистент</title>
+    <title>CashFlow (КэшФлоу) — учёт денег малого бизнеса по банковской выписке</title>
+    <meta name="description" content="CashFlow (КэшФлоу): загрузите выписку из банка и узнайте реальную прибыль, расходы по категориям и прогноз кассовых разрывов. ИИ-ассистент для ИП и малого бизнеса.">
+    <meta name="robots" content="index, follow">
+    <link rel="canonical" href="__SITE_URL__/">
+    <meta property="og:type" content="website">
+    <meta property="og:locale" content="ru_RU">
+    <meta property="og:site_name" content="CashFlow">
+    <meta property="og:title" content="CashFlow (КэшФлоу) — учёт денег малого бизнеса по банковской выписке">
+    <meta property="og:description" content="CashFlow (КэшФлоу): загрузите выписку из банка и узнайте реальную прибыль, расходы по категориям и прогноз кассовых разрывов. ИИ-ассистент для ИП и малого бизнеса.">
+    <meta property="og:url" content="__SITE_URL__/">
+    <!--YANDEX_VERIFICATION-->
+    <script type="application/ld+json">
+    {"@context":"https://schema.org","@type":"WebApplication","name":"CashFlow","alternateName":"КэшФлоу",
+     "url":"__SITE_URL__/","applicationCategory":"BusinessApplication","operatingSystem":"Web","inLanguage":"ru",
+     "description":"CashFlow (КэшФлоу): загрузите выписку из банка и узнайте реальную прибыль, расходы по категориям и прогноз кассовых разрывов. ИИ-ассистент для ИП и малого бизнеса."}
+    </script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,300;14..32,400;14..32,500;14..32,600;14..32,700;14..32,800&family=Playfair+Display:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -377,7 +392,7 @@
 <div class="container">
     <div class="card desktop-title">
         <h1>CashFlow</h1>
-        <div class="subtitle">ИИ-финансовый ассистент для микробизнеса</div>
+        <div class="subtitle">КэшФлоу: ИИ-финансовый ассистент для микробизнеса. Прибыль, расходы и прогноз кассовых разрывов по банковской выписке</div>
     </div>
     <div class="card" id="introCard" style="padding:0.9rem 1.2rem;">
         <button class="suggestion-btn" id="introToggle" onclick="toggleIntro()" aria-expanded="false" aria-controls="introBody"
@@ -395,7 +410,7 @@
         <details>
             <summary style="cursor:pointer; color:var(--accent); font-weight:600;">🔒 Что происходит с вашими данными</summary>
             <div class="info" style="line-height:1.55;">
-                Сам файл выписки не сохраняется. Сервис хранит только итоги анализа (суммы, категории, названия основных источников дохода) под случайным идентификатором в вашем браузере, без регистрации.<br><br>
+                Сам файл выписки не сохраняется. Сервис хранит только итоги анализа (суммы, категории, названия основных источников дохода) и правила категорий, которые вы сами задаёте, под случайным идентификатором в вашем браузере, без регистрации.<br><br>
                 Для определения части категорий, советов и ответов в чате итоговые данные (суммы, категории, иногда названия операций) передаются в GigaChat (Сбер).<br><br>
                 Сервис в тестовом режиме: входа по паролю пока нет, а данные могут быть удалены при обновлении. Если сомневаетесь, начните с примера или уберите из выписки имена.
             </div>
@@ -440,6 +455,7 @@
         <div id="forecastBlock" class="card" style="display:none;"><div id="forecastContent"></div></div>
         <div id="tipsBlock" class="card" style="display:none;"><div id="tipsContent"></div></div>
         <div id="categoriesBlock" class="card" style="display:none;"><div id="categoriesContent"></div><canvas id="expenseChart" style="max-width:300px; margin:1rem auto;"></canvas></div>
+        <div id="catEditBlock" class="card" style="display:none;"><div id="catEditContent"></div></div>
         <div id="trendBlock" class="card" style="display:none;"><canvas id="trendChart"></canvas></div>
         <div id="seasonalityBlock" class="card" style="display:none;"><div id="seasonalityContent"></div></div>
         <div id="costBlock" class="card" style="display:none;">
@@ -625,6 +641,7 @@ function showSmartSuggestions(data) {
         { key:'forecast', text:'⚠️ Прогноз кассовых разрывов', func:showCashGapForecast },
         { key:'savings', text:'💡 Советы', func:showTips },
         { key:'categories', text:'📊 Категории', func:showCategories },
+        { key:'catedit', text:'✏️ Поправить категории', func:showCategoryEditor },
         { key:'trend', text:'📈 Динамика', func:showTrend },
         { key:'seasonality', text:'📅 Сезонность', func:showSeasonality },
         { key:'cost', text:'💰 Себестоимость', func:showCost },
@@ -981,8 +998,90 @@ function calculateCost() {
     `;
 }
 
+const BASE_CATEGORIES = ['Аренда','Сырьё и товары','Реклама','Налоги','Транспорт','Продукты','Кафе и рестораны','Образование','Зарплата','Коммунальные и связь','Оборудование','Переводы','Прочее'];
+let catPending = {};   // номер строки -> новая категория
+const escAttr = t => escapeHtml(String(t)).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
+function catOptions(current) {
+    const set = new Set([...BASE_CATEGORIES, ...Object.keys((analysisData && analysisData.categories) || {}), current]);
+    return [...set].map(c => `<option value="${escAttr(c)}"${c === current ? ' selected' : ''}>${escapeHtml(c)}</option>`).join('')
+        + '<option value="__new__">＋ Новая категория…</option>';
+}
+
+function updateApplyBtn() {
+    const btn = document.getElementById('catApplyBtn');
+    if (!btn) return;
+    const n = Object.keys(catPending).length;
+    btn.disabled = n === 0;
+    btn.textContent = n ? `Сохранить и пересчитать (${n})` : 'Сохранить и пересчитать';
+}
+
+function onCatChange(i, sel) {
+    const it = analysisData.expense_items[i];
+    let val = sel.value;
+    if (val === '__new__') {
+        const name = (prompt('Название новой категории:') || '').trim().slice(0, 60);
+        if (!name) { sel.value = catPending[i] || it.category; return; }
+        sel.insertBefore(new Option(name, name), sel.lastElementChild);
+        sel.value = name; val = name;
+    }
+    if (val === it.category) delete catPending[i]; else catPending[i] = val;
+    updateApplyBtn();
+}
+
+async function showCategoryEditor() {
+    const el = document.getElementById('catEditContent');
+    const items = (analysisData && analysisData.expense_items) || [];
+    catPending = {};
+    let rulesHtml = '';
+    try {
+        const r = await fetchWithUser('/category-rules');
+        const rules = (await r.json()).rules || {};
+        const keys = Object.keys(rules);
+        if (keys.length) rulesHtml = '<h4 style="margin:1.4rem 0 0.5rem;">Мои правила</h4>' + keys.map(k =>
+            `<div class="info" style="display:flex; justify-content:space-between; align-items:center; gap:10px;"><span>«${escapeHtml(k)}» → ${escapeHtml(rules[k])}</span><button class="suggestion-btn" data-key="${escAttr(k)}" onclick="deleteCatRule(this.dataset.key)" title="Удалить правило">✕</button></div>`).join('');
+    } catch (e) { /* правила просто не покажутся */ }
+    const selStyle = 'background:var(--stat-bg); color:var(--text-primary); border:1px solid var(--border-color); border-radius:12px; padding:6px 8px; max-width:200px;';
+    const rows = items.map((it, i) => `<tr>
+        <td style="padding:6px 8px;">${escapeHtml(it.text)}<div style="font-size:0.7rem; color:var(--text-secondary);">${it.count} оп.</div></td>
+        <td style="padding:6px 8px; text-align:right; white-space:nowrap;">${Math.round(it.amount).toLocaleString('ru-RU')} ₽</td>
+        <td style="padding:6px 8px;"><select style="${selStyle}" onchange="onCatChange(${i}, this)">${catOptions(it.category)}</select></td></tr>`).join('');
+    el.innerHTML = `<h3><i class="fas fa-pen"></i> Поправить категории</h3>
+        <p style="font-size:0.85rem; color:var(--text-secondary); margin:0.5rem 0 1rem;">Выберите верную категорию у нужной операции и нажмите «Сохранить». Сервис запомнит правило и применит его при следующих загрузках.</p>`
+        + (items.length
+            ? `<div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse;"><tr><th style="text-align:left; padding:6px 8px;">Операция</th><th style="padding:6px 8px;">Сумма</th><th style="text-align:left; padding:6px 8px;">Категория</th></tr>${rows}</table></div>
+               <button class="btn" id="catApplyBtn" onclick="applyCategoryChanges()" disabled style="margin-top:1rem;">Сохранить и пересчитать</button>`
+            : '<div class="info">Список операций доступен сразу после анализа файла. Если вы открыли анализ из истории, загрузите файл и нажмите «Анализировать» ещё раз.</div>')
+        + rulesHtml;
+    showBlock('catEditBlock');
+}
+
+async function applyCategoryChanges() {
+    const items = analysisData.expense_items || [];
+    const changes = Object.entries(catPending).map(([i, cat]) => ({ keyword: items[i].text, category: cat }));
+    if (!changes.length) return;
+    const res = await fetchWithUser('/category-rules', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ changes }) });
+    const out = await res.json().catch(() => ({}));
+    if (!res.ok) { alert(out.error || 'Не удалось сохранить правила'); return; }
+    await recalcAfterRules();
+}
+
+async function deleteCatRule(key) {
+    await fetchWithUser('/category-rules/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ keyword: key }) });
+    await recalcAfterRules();
+}
+
+async function recalcAfterRules() {
+    if (selectedFile && analysisData && analysisData.filename === selectedFile.name) {
+        await uploadFile(true);      // пересчёт по уже выбранному файлу, без новой записи в истории
+    } else {
+        alert('Правила сохранены. Они применятся при следующей загрузке выписки.');
+    }
+    showCategoryEditor();
+}
+
 function showBlock(id) {
-    const blocks = ['fullReport','forecastBlock','tipsBlock','categoriesBlock','trendBlock','seasonalityBlock','costBlock','chatBlock','budgetBlock','historyBlock'];
+    const blocks = ['fullReport','forecastBlock','tipsBlock','categoriesBlock','catEditBlock','trendBlock','seasonalityBlock','costBlock','chatBlock','budgetBlock','historyBlock'];
     blocks.forEach(b=>{ const el = document.getElementById(b); if(el) el.style.display = 'none'; });
     document.getElementById(id).style.display = 'block';
     if(window.innerWidth<=768 && mobileMenu) mobileMenu.style.display='none';
