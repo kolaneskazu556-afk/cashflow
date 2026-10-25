@@ -1,6 +1,7 @@
 import os
 import io
 import re
+import html as html_lib
 import time
 import uuid
 import threading
@@ -8,7 +9,7 @@ import json
 import math
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from io import BytesIO, StringIO
 from pathlib import Path
 
@@ -18,7 +19,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, UploadFile, File, Form, Request, Depends, Header
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, Response
 import httpx
 
 load_dotenv()
@@ -79,6 +80,22 @@ def init_db():
                 limit_amount REAL,
                 month TEXT,
                 PRIMARY KEY (user_id, category, month)
+            )
+        ''')
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS category_rules (
+                user_id TEXT NOT NULL,
+                keyword TEXT NOT NULL,
+                category TEXT NOT NULL,
+                PRIMARY KEY (user_id, keyword)
+            )
+        ''')
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS chat_usage (
+                user_id TEXT NOT NULL,
+                day TEXT NOT NULL,
+                count INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (user_id, day)
             )
         ''')
 
@@ -158,6 +175,53 @@ def get_budget_limits(user_id):
     return {r[0]: r[1] for r in rows}
 
 
+MAX_RULES_PER_USER = 500
+
+
+def get_category_rules(user_id):
+    with db() as conn:
+        rows = conn.execute('SELECT keyword, category FROM category_rules WHERE user_id = ?', (user_id,)).fetchall()
+    return {r[0]: r[1] for r in rows}
+
+
+def save_category_rules(user_id, changes):
+    """changes: [{keyword, category}] -> число сохранённых правил. Ключ хранится в нижнем регистре."""
+    clean_changes = []
+    for c in changes if isinstance(changes, list) else []:
+        kw = str((c or {}).get('keyword', '')).strip().lower()[:200]
+        cat = str((c or {}).get('category', '')).strip()[:60]
+        if kw and cat:
+            clean_changes.append((kw, cat))
+    with db() as conn:
+        existing = {r[0] for r in conn.execute('SELECT keyword FROM category_rules WHERE user_id = ?', (user_id,))}
+        new_count = len({k for k, _ in clean_changes} - existing)
+        if len(existing) + new_count > MAX_RULES_PER_USER:
+            raise ValueError(f"Слишком много правил (максимум {MAX_RULES_PER_USER})")
+        for kw, cat in clean_changes:
+            conn.execute('INSERT OR REPLACE INTO category_rules (user_id, keyword, category) VALUES (?, ?, ?)',
+                         (user_id, kw, cat))
+    return len(clean_changes)
+
+
+def delete_category_rule(user_id, keyword):
+    with db() as conn:
+        conn.execute('DELETE FROM category_rules WHERE user_id = ? AND keyword = ?',
+                     (user_id, str(keyword).strip().lower()))
+
+
+def make_override(rules):
+    """Правило срабатывает, если его ключ входит в текст операции; длинные ключи важнее коротких."""
+    ordered = sorted(rules.items(), key=lambda kv: -len(kv[0]))
+
+    def find(text):
+        low = (text or '').lower()
+        for kw, cat in ordered:
+            if kw and kw in low:
+                return cat
+        return ''
+    return find
+
+
 def set_budget_limit(user_id, category, limit_amount):
     with db() as conn:
         conn.execute('INSERT OR REPLACE INTO budgets (user_id, category, limit_amount, month) '
@@ -185,6 +249,38 @@ def check_budget_alerts(user_id, expenses_by_category):
                 'message': f"⚠️ Лимит по категории '{category}' почти исчерпан: {spent:.2f} ₽ / {limit:.2f} ₽ ({round(spent / limit * 100)}%)"
             })
     return alerts
+
+
+# ============ ЛИМИТ ВОПРОСОВ В ЧАТЕ ============
+def _env_int(name, default):
+    try:
+        return int(os.getenv(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+CHAT_DAILY_LIMIT = max(1, _env_int('CHAT_DAILY_LIMIT', 20))   # вопросов на человека в сутки
+MSK = timezone(timedelta(hours=3))
+
+
+def _today_msk():
+    return datetime.now(MSK).strftime('%Y-%m-%d')   # сутки считаем по Москве, сброс в 00:00
+
+
+def chat_limit_info(user_id):
+    with db() as conn:
+        row = conn.execute('SELECT count FROM chat_usage WHERE user_id = ? AND day = ?',
+                           (user_id, _today_msk())).fetchone()
+    used = row[0] if row else 0
+    return {'limit': CHAT_DAILY_LIMIT, 'used': used, 'remaining': max(CHAT_DAILY_LIMIT - used, 0)}
+
+
+def chat_register_use(user_id):
+    """Вызывается только после успешного ответа — ошибки вопрос не «сжигают»."""
+    with db() as conn:
+        conn.execute('INSERT INTO chat_usage (user_id, day, count) VALUES (?, ?, 1) '
+                     'ON CONFLICT(user_id, day) DO UPDATE SET count = count + 1',
+                     (user_id, _today_msk()))
 
 
 # ============ GIGACHAT (Сбер) ============
@@ -519,10 +615,14 @@ def analyze_statement(file_content: bytes, filename: str, user_id: str,
         return BANK_CAT_MAP.get(c, c)
 
     exp['_bank'] = exp.apply(bank_cat, axis=1)
+    # правила ищем по описанию + получателю + комментарию вместе; они важнее банка и ИИ
+    match_text = exp.apply(lambda r: ' '.join(str(r[c]) for c in ('description', 'merchant', 'comment')
+                                              if c in r.index and pd.notna(r[c])), axis=1)
+    exp['_ovr'] = match_text.map(make_override(get_category_rules(user_id)))
 
     ai_calls = 0
     cat_map = {}
-    for text in exp.loc[exp['_bank'] == '', '_text'].unique():
+    for text in exp.loc[(exp['_bank'] == '') & (exp['_ovr'] == ''), '_text'].unique():
         low = text.lower()
         if not low:
             cat_map[text] = 'other'
@@ -541,6 +641,8 @@ def analyze_statement(file_content: bytes, filename: str, user_id: str,
         cat_map[text] = cat
 
     def final_cat(row):
+        if row['_ovr']:
+            return row['_ovr']
         if row['_bank']:
             return row['_bank']
         c = cat_map.get(row['_text'], 'other')
@@ -647,17 +749,72 @@ def analyze_statement(file_content: bytes, filename: str, user_id: str,
         'insights': [],
         'transfers': transfers,
     }
+    grouped = (exp[exp['_text'] != ''].groupby(['_text', '_cat'])['abs_amount'].agg(['sum', 'count'])
+               .reset_index().sort_values('sum', ascending=False).head(100))
+    result['expense_items'] = [{'text': r['_text'], 'category': r['_cat'], 'amount': float(r['sum']), 'count': int(r['count'])}
+                               for r in grouped.to_dict('records')]
     result = clean(result)
-    save_analysis_to_db(user_id, filename, result, replace=replace)
+    # в базу кладём только итоги: названия операций из expense_items остаются лишь в ответе браузеру
+    save_analysis_to_db(user_id, filename, {k: v for k, v in result.items() if k != 'expense_items'}, replace=replace)
     return result
 
 
 # ============ ЭНДПОИНТЫ ============
+# ============ ПОИСКОВИКИ (SEO) ============
+PRIVATE_PATHS = ['/upload', '/ask', '/history', '/category-rules', '/chat-limit', '/get-budgets', '/set-budget',
+                 '/monthly-comparison', '/cash-gap-forecast', '/demo-statement', '/download-template', '/health']
+
+
+def site_url(request):
+    """Основной адрес сайта: переменная SITE_URL (лучше) или адрес из запроса."""
+    env = (os.getenv('SITE_URL') or '').strip().rstrip('/')
+    if env:
+        return env
+    host = (request.headers.get('x-forwarded-host') or request.headers.get('host') or '').strip()
+    return f"https://{host}" if re.fullmatch(r'[A-Za-z0-9.\-:]+', host) else ''
+
+
+def render_index(page: str, site: str, verification: str = '') -> str:
+    meta = ''
+    if verification.strip():
+        meta = f'<meta name="yandex-verification" content="{html_lib.escape(verification.strip(), quote=True)}">'
+    return page.replace('__SITE_URL__', html_lib.escape(site, quote=True)).replace('<!--YANDEX_VERIFICATION-->', meta)
+
+
+def build_robots(site: str) -> str:
+    lines = ['User-agent: *', 'Allow: /'] + [f'Disallow: {p}' for p in PRIVATE_PATHS]
+    if site:
+        lines.append(f'Sitemap: {site}/sitemap.xml')
+    return '\n'.join(lines) + '\n'
+
+
+def build_sitemap(site: str, lastmod: str) -> str:
+    return ('<?xml version="1.0" encoding="UTF-8"?>\n'
+            '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+            f'  <url><loc>{html_lib.escape(site, quote=True)}/</loc><lastmod>{lastmod}</lastmod>'
+            '<changefreq>weekly</changefreq><priority>1.0</priority></url>\n</urlset>\n')
+
+
 @app.get("/")
-async def home():
+async def home(request: Request):
     if INDEX_PATH.exists():
-        return HTMLResponse(INDEX_PATH.read_text(encoding="utf-8"))
+        page = INDEX_PATH.read_text(encoding="utf-8")
+        return HTMLResponse(render_index(page, site_url(request), os.getenv('YANDEX_VERIFICATION', '')))
     return HTMLResponse("<h1>index.html не найден рядом с main.py</h1>", status_code=500)
+
+
+@app.get("/robots.txt")
+async def robots_txt(request: Request):
+    return Response(build_robots(site_url(request)), media_type="text/plain; charset=utf-8")
+
+
+@app.get("/sitemap.xml")
+async def sitemap_xml(request: Request):
+    site = site_url(request)
+    if not site:
+        return Response("Не удалось определить адрес сайта. Задайте SITE_URL.", status_code=500, media_type="text/plain; charset=utf-8")
+    lastmod = datetime.fromtimestamp(INDEX_PATH.stat().st_mtime, MSK).strftime('%Y-%m-%d') if INDEX_PATH.exists() else datetime.now(MSK).strftime('%Y-%m-%d')
+    return Response(build_sitemap(site, lastmod), media_type="application/xml; charset=utf-8")
 
 
 @app.post("/upload")
@@ -735,11 +892,14 @@ async def cash_gap_forecast(user_id: str = Depends(get_user_id)):
 async def ask_question(request: Request, user_id: str = Depends(get_user_id)):
     data = await request.json()
     question = str(data.get('question', ''))[:1000]
+    info = chat_limit_info(user_id)
     last = get_latest_analysis(user_id)
     if not last:
-        return JSONResponse({'answer': 'Сначала загрузите и проанализируйте выписку'})
+        return JSONResponse({'answer': 'Сначала загрузите и проанализируйте выписку', **info})
     if not GIGACHAT_AUTH_KEY:
-        return JSONResponse({'answer': '❌ GigaChat не подключен. Добавьте GIGACHAT_CREDENTIALS в настройках Render.'})
+        return JSONResponse({'answer': '❌ GigaChat не подключен. Добавьте GIGACHAT_CREDENTIALS в настройках Render.', **info})
+    if info['remaining'] <= 0:
+        return JSONResponse({'answer': f"⏳ Лимит вопросов на сегодня исчерпан ({info['limit']} в сутки). Он обновится в 00:00 по Москве.", **info})
 
     context = (f"Доходы: {last['income']:.2f} ₽\nРасходы: {last['expense']:.2f} ₽\n"
                f"Чистая прибыль: {last['net_profit']:.2f} ₽\n"
@@ -767,9 +927,10 @@ async def ask_question(request: Request, user_id: str = Depends(get_user_id)):
 
     try:
         answer = await run_in_threadpool(call)
-        return JSONResponse({'answer': answer})
+        chat_register_use(user_id)
+        return JSONResponse({'answer': answer, **chat_limit_info(user_id)})
     except Exception as e:
-        return JSONResponse({'answer': llm_error_text(e)})
+        return JSONResponse({'answer': llm_error_text(e), **info})
 
 
 def read_demo_bytes():
@@ -778,6 +939,33 @@ def read_demo_bytes():
         return DEMO_PATH.read_bytes()
     import base64, zlib
     return zlib.decompress(base64.b64decode("".join(DEMO_CSV_B64.split())))
+
+
+@app.get("/category-rules")
+async def category_rules(user_id: str = Depends(get_user_id)):
+    return JSONResponse({'rules': get_category_rules(user_id)})
+
+
+@app.post("/category-rules")
+async def category_rules_save(request: Request, user_id: str = Depends(get_user_id)):
+    data = await request.json()
+    try:
+        saved = save_category_rules(user_id, data.get('changes'))
+    except ValueError as e:
+        return JSONResponse({'error': str(e)}, status_code=400)
+    return JSONResponse({'saved': saved, 'rules': get_category_rules(user_id)})
+
+
+@app.post("/category-rules/delete")
+async def category_rules_delete(request: Request, user_id: str = Depends(get_user_id)):
+    data = await request.json()
+    delete_category_rule(user_id, data.get('keyword', ''))
+    return JSONResponse({'rules': get_category_rules(user_id)})
+
+
+@app.get("/chat-limit")
+async def chat_limit(user_id: str = Depends(get_user_id)):
+    return JSONResponse(chat_limit_info(user_id))
 
 
 @app.get("/demo-statement")
