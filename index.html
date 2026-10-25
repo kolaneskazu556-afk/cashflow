@@ -379,6 +379,31 @@
         <h1>CashFlow</h1>
         <div class="subtitle">ИИ-финансовый ассистент для микробизнеса</div>
     </div>
+    <div class="card" id="introCard" style="padding:0.9rem 1.2rem;">
+        <button class="suggestion-btn" id="introToggle" onclick="toggleIntro()" aria-expanded="false" aria-controls="introBody"
+                style="width:100%; display:flex; justify-content:space-between; align-items:center; gap:10px; text-align:left;">
+            <span><i class="fas fa-circle-info"></i> Что это и как работает</span>
+            <i class="fas fa-chevron-down" id="introChevron"></i>
+        </button>
+        <div id="introBody" style="display:none; margin-top:1rem;">
+        <p style="margin:0.7rem 0 1rem; line-height:1.55;">Загрузите банковскую выписку, и сервис покажет реальную прибыль, куда уходят деньги и хватит ли денег в ближайшие месяцы. Не хотите загружать своё? Нажмите «Попробовать на примере» ниже: там вымышленные данные.</p>
+        <div class="result-stats" style="margin-bottom:0.8rem;">
+            <div class="stat-card"><div class="value">1</div><div class="label">Загрузите выписку (CSV или Excel)</div></div>
+            <div class="stat-card"><div class="value">2</div><div class="label">Получите отчёт, категории и прогноз</div></div>
+            <div class="stat-card"><div class="value">3</div><div class="label">Задайте вопрос ИИ по своим цифрам</div></div>
+        </div>
+        <details>
+            <summary style="cursor:pointer; color:var(--accent); font-weight:600;">🔒 Что происходит с вашими данными</summary>
+            <div class="info" style="line-height:1.55;">
+                Сам файл выписки не сохраняется. Сервис хранит только итоги анализа (суммы, категории, названия основных источников дохода) под случайным идентификатором в вашем браузере, без регистрации.<br><br>
+                Для определения части категорий, советов и ответов в чате итоговые данные (суммы, категории, иногда названия операций) передаются в GigaChat (Сбер).<br><br>
+                Сервис в тестовом режиме: входа по паролю пока нет, а данные могут быть удалены при обновлении. Если сомневаетесь, начните с примера или уберите из выписки имена.
+            </div>
+        </details>
+        <div class="info" style="margin-top:0.8rem;"><i class="fas fa-flask"></i> Это ранняя версия: прогнозы ориентировочные, проверено на выписках Альфа-Банка. Нам важно ваше мнение.</div>
+        <div style="margin-top:0.8rem;"><a class="suggestion-btn feedback-link" target="_blank" rel="noopener" href="#" style="display:none; text-decoration:none;">💬 Оставить отзыв</a></div>
+        </div>
+    </div>
     <div class="card">
         <div class="upload-area" onclick="document.getElementById('fileInput').click()">
             <i class="fas fa-cloud-upload-alt"></i>
@@ -444,11 +469,32 @@
             <h3><i class="fas fa-history"></i> История анализов</h3>
             <div id="historyList"></div>
         </div>
-        <div id="chatBlock" class="card" style="display:none;"><h3>Чат с ИИ</h3><div class="chat-messages" id="chatMessages"><div>Задайте вопрос о финансах</div></div><div class="chat-input"><input type="text" id="questionInput" placeholder="Например: на чём мне сэкономить?"><button class="btn" onclick="askQuestion()">Отправить</button></div></div>
+        <div id="chatBlock" class="card" style="display:none;"><h3>Чат с ИИ</h3><div class="chat-messages" id="chatMessages"><div>Задайте вопрос о финансах</div></div><div class="chat-input"><input type="text" id="questionInput" placeholder="Например: на чём мне сэкономить?"><button class="btn" id="askBtn" onclick="askQuestion()">Отправить</button></div><div id="chatLimit" style="font-size:0.8rem; color:var(--text-secondary); margin-top:0.7rem;"></div></div>
+    </div>
+    <div id="feedbackCard" class="card" style="display:none; text-align:center;">
+        <p style="margin-bottom:0.8rem; line-height:1.5;">Что понравилось, что непонятно, чего не хватает? Это займёт минуту и поможет сделать сервис полезнее.</p>
+        <a class="suggestion-btn feedback-link" target="_blank" rel="noopener" href="#" style="display:none; text-decoration:none;">💬 Оставить отзыв</a>
     </div>
 </div>
 
 <script>
+// Ссылка на форму отзыва (например, Яндекс Формы). Пока пусто: кнопки скрыты.
+const FEEDBACK_URL = '';
+if (FEEDBACK_URL) {
+    document.querySelectorAll('.feedback-link').forEach(a => { a.href = FEEDBACK_URL; a.style.display = 'inline-block'; });
+    document.getElementById('feedbackCard').style.display = 'block';
+}
+
+function toggleIntro() {
+    const body = document.getElementById('introBody');
+    const btn = document.getElementById('introToggle');
+    const chevron = document.getElementById('introChevron');
+    const open = body.style.display === 'none';
+    body.style.display = open ? 'block' : 'none';
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    chevron.className = open ? 'fas fa-chevron-up' : 'fas fa-chevron-down';
+}
+
 // Генерируем уникальный ID для пользователя и сохраняем в браузере
 let userId = localStorage.getItem('cashflow_user_id');
 if (!userId) {
@@ -861,7 +907,27 @@ async function loadHistoryItem(id) {
     window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
-function showChat() { showBlock('chatBlock'); }
+function updateChatLimit(info) {
+    const el = document.getElementById('chatLimit');
+    if (!el || !info || info.limit === undefined || info.remaining === undefined) return;
+    const left = info.remaining;
+    el.style.color = left <= 0 ? '#ef4444' : (left <= 3 ? '#f59e0b' : 'var(--text-secondary)');
+    el.innerHTML = left <= 0
+        ? '<i class="fas fa-hourglass-half"></i> Лимит вопросов на сегодня исчерпан (' + info.limit + '). Обновится в 00:00 по Москве.'
+        : '<i class="fas fa-comment-dots"></i> Осталось вопросов сегодня: <b>' + left + '</b> из ' + info.limit;
+    const btn = document.getElementById('askBtn'), inp = document.getElementById('questionInput');
+    if (btn) btn.disabled = left <= 0;
+    if (inp) inp.disabled = left <= 0;
+}
+
+async function loadChatLimit() {
+    try {
+        const r = await fetchWithUser('/chat-limit');
+        if (r.ok) updateChatLimit(await r.json());
+    } catch (e) { /* строка просто не покажется */ }
+}
+
+function showChat() { showBlock('chatBlock'); loadChatLimit(); }
 
 async function askQuestion() {
     const q = document.getElementById('questionInput').value.trim();
@@ -875,6 +941,7 @@ async function askQuestion() {
     try{
         const res = await fetchWithUser('/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:q})});
         const data = await res.json();
+        updateChatLimit(data);
         document.querySelector('.typing')?.remove();
         chatDiv.innerHTML += `<div class="chat-message-bot"><span>${escapeHtml(data.answer)}</span></div>`;
         chatDiv.scrollTop = chatDiv.scrollHeight;
