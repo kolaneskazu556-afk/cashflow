@@ -762,7 +762,7 @@ def analyze_statement(file_content: bytes, filename: str, user_id: str,
 # ============ ЭНДПОИНТЫ ============
 # ============ ПОИСКОВИКИ (SEO) ============
 PRIVATE_PATHS = ['/upload', '/ask', '/history', '/category-rules', '/chat-limit', '/get-budgets', '/set-budget',
-                 '/monthly-comparison', '/cash-gap-forecast', '/demo-statement', '/download-template', '/health']
+                 '/monthly-comparison', '/cash-gap-forecast', '/demo-statement', '/download-template', '/health', '/ping']
 
 
 def site_url(request):
@@ -801,6 +801,12 @@ async def home(request: Request):
         page = INDEX_PATH.read_text(encoding="utf-8")
         return HTMLResponse(render_index(page, site_url(request), os.getenv('YANDEX_VERIFICATION', '')))
     return HTMLResponse("<h1>index.html не найден рядом с main.py</h1>", status_code=500)
+
+
+@app.api_route("/ping", methods=["GET", "HEAD"])
+async def ping():
+    """Лёгкая проверка «жив ли сервис» для мониторинга: не трогает базу и ИИ. HEAD нужен многим мониторам."""
+    return Response("ok", media_type="text/plain")
 
 
 @app.get("/robots.txt")
