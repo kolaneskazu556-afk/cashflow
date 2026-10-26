@@ -433,7 +433,107 @@ COLUMN_ALIASES = {
 }
 
 
+# ============ 1С-ВЫПИСКА (формат 1CClientBankExchange, .txt) ============
+def looks_like_1c(content: bytes) -> bool:
+    return content[:300].lstrip(b'\xef\xbb\xbf \r\n\t').lower().startswith(b'1cclientbankexchange')
+
+
+def _decode_1c(content: bytes) -> str:
+    # заголовок «Кодировка=DOS» в самом файле записан в той же кодировке, поэтому смотрим на него по-разному
+    is_dos = any('\u043a\u043e\u0434\u0438\u0440\u043e\u0432\u043a\u0430=dos' in content[:600].decode(enc, errors='ignore').lower()
+                 for enc in ('cp1251', 'cp866'))
+    for enc in (['cp866'] if is_dos else []) + ['utf-8-sig', 'cp1251']:
+        try:
+            return content.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return content.decode('cp1251', errors='replace')
+
+
+def _norm_name(s) -> str:
+    return re.sub(r'[\s"«»\']+', ' ', str(s).lower()).strip()
+
+
+def parse_1c(content: bytes) -> pd.DataFrame:
+    """Выписка в формате обмена с 1С. Направление операции определяем по своему расчётному счёту."""
+    from collections import Counter
+    own, docs, cur = set(), [], None
+    for raw in _decode_1c(content).splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line == 'КонецДокумента':
+            if cur is not None:
+                docs.append(cur)
+            cur = None
+            continue
+        key, _, val = line.partition('=')
+        key, val = key.strip(), val.strip()
+        if key == 'СекцияДокумент':
+            cur = {}
+        elif cur is not None:
+            cur[key] = val
+        elif key == 'РасчСчет' and val:
+            own.add(val)
+
+    def g(d, *keys):
+        return next((d[k] for k in keys if d.get(k)), '')
+
+    parsed = [{
+        'pa': g(d, 'ПлательщикСчет', 'ПлательщикРасчСчет'), 'ra': g(d, 'ПолучательСчет', 'ПолучательРасчСчет'),
+        'pn': re.sub(r'^\s*инн\s*\d+\s*', '', g(d, 'Плательщик', 'Плательщик1'), flags=re.I),
+        'rn': re.sub(r'^\s*инн\s*\d+\s*', '', g(d, 'Получатель', 'Получатель1'), flags=re.I),
+        'sum': g(d, 'Сумма'), 'date': g(d, 'Дата'), 'out': g(d, 'ДатаСписано'), 'inn': g(d, 'ДатаПоступило'),
+        'desc': g(d, 'НазначениеПлатежа', 'НазначениеПлатежа1'),
+    } for d in docs]
+    if not own and parsed:   # в шапке нет счёта — берём тот, что встречается чаще всего
+        cnt = Counter(a for p in parsed for a in {p['pa'], p['ra']} if a)
+        if cnt:
+            top, n = cnt.most_common(1)[0]
+            if n >= max(2, len(parsed) / 2):
+                own = {top}
+
+    def iso(x):
+        for fmt in ('%d.%m.%Y', '%d.%m.%y'):
+            try:
+                return datetime.strptime(x, fmt).date().isoformat()
+            except ValueError:
+                continue
+        return x
+
+    rows, own_names = [], set()
+    for p in parsed:
+        try:
+            amount = float(p['sum'].replace(' ', '').replace(',', '.'))
+        except ValueError:
+            continue
+        if amount <= 0:
+            continue
+        both = p['pa'] in own and p['ra'] in own
+        if p['pa'] in own:
+            sign, party, mine, day = -1, p['rn'], p['pn'], p['out'] or p['date']
+        elif p['ra'] in own:
+            sign, party, mine, day = 1, p['pn'], p['rn'], p['inn'] or p['date']
+        else:
+            continue
+        if mine:
+            own_names.add(_norm_name(mine))
+        desc = re.sub(r'\s+', ' ', p['desc']).strip()
+        if both:
+            desc = 'Перевод между своими счетами. ' + desc
+        rows.append({'date': iso(day), 'description': desc, 'merchant': party, 'amount': sign * amount,
+                     'type': 'списание' if sign < 0 else 'пополнение'})
+    if not rows:
+        raise ValueError("В 1С-выписке не найдено операций по вашему расчётному счёту")
+    for r in rows:   # перевод себе под тем же названием (ИП <-> ИП) — это не доход и не расход бизнеса
+        if _norm_name(r['merchant']) in own_names and not r['description'].startswith('Перевод между'):
+            r['description'] = 'Перевод между своими счетами. ' + r['description']
+    return pd.DataFrame(rows)
+
+
 def parse_file(content: bytes, filename: str) -> pd.DataFrame:
+    if looks_like_1c(content):
+        return parse_1c(content)
     ext = filename.rsplit('.', 1)[-1].lower()
     if ext == 'csv':
         text = None
@@ -448,14 +548,14 @@ def parse_file(content: bytes, filename: str) -> pd.DataFrame:
         return pd.read_csv(StringIO(text), sep=None, engine='python')
     if ext in ('xlsx', 'xls'):
         return pd.read_excel(BytesIO(content), engine='openpyxl')
-    raise ValueError("Поддерживаются только CSV и Excel файлы")
+    raise ValueError("Поддерживаются CSV, Excel и выписка из 1С (.txt)")
 
 
 TRANSFER_CATEGORIES = {'финансовые операции', 'переводы', 'перевод', 'пополнения'}
 ORG_MARKERS = re.compile(r'(?:^|\s)(?:ООО|АО|ПАО|ОАО|ЗАО|ИП|НКО|БАНК)(?:\s|$)|["«»\d]|QR', re.I)
 PERSON_SHORT = re.compile(r'^[А-ЯЁ][а-яё\-]+\s[А-ЯЁ]\.$')                         # «Роман Ф.»
 PERSON_FULL = re.compile(r'^[А-ЯЁ][а-яё\-]+(?:\s[А-ЯЁ][а-яё\-]+){1,2}$')           # «Фирсов Роман Сергеевич»
-OWN_ACCOUNT_PHRASES = ('между своими', 'перевод себе', 'на свой счет', 'на свой счёт', 'на свою карту',
+OWN_ACCOUNT_PHRASES = ('собственных средств', 'личных нужд', 'личные нужды', 'между своими', 'перевод себе', 'на свой счет', 'на свой счёт', 'на свою карту',
                        'внесение наличных', 'пополнение счета', 'пополнение счёта', 'взнос владельца')
 
 
