@@ -457,6 +457,21 @@
         <div id="tipsBlock" class="card" style="display:none;"><div id="tipsContent"></div></div>
         <div id="categoriesBlock" class="card" style="display:none;"><div id="categoriesContent"></div><canvas id="expenseChart" style="max-width:300px; margin:1rem auto;"></canvas></div>
         <div id="catEditBlock" class="card" style="display:none;"><div id="catEditContent"></div></div>
+        <div id="taxBlock" class="card" style="display:none;">
+            <h3><i class="fas fa-receipt"></i> Налоги: сколько отложить и когда платить</h3>
+            <div class="budget-input">
+                <select id="taxMode" onchange="onTaxModeChange()">
+                    <option value="usn_d">УСН «Доходы» (6%)</option>
+                    <option value="usn_dr">УСН «Доходы минус расходы» (15%)</option>
+                    <option value="npd">Самозанятый, НПД (4% или 6%)</option>
+                </select>
+                <input type="number" id="taxRate" step="0.1" min="0" max="100" value="6" oninput="renderTax()" placeholder="Ставка, %" title="Ставка, %">
+            </div>
+            <label id="taxIpWrap" style="display:flex; align-items:center; gap:8px; font-size:0.9rem; margin-bottom:0.8rem; cursor:pointer;">
+                <input type="checkbox" id="taxIp" checked onchange="renderTax()" style="accent-color:#f97316; width:18px; height:18px;"> Я ИП: посчитать взносы за себя
+            </label>
+            <div id="taxResult"></div>
+        </div>
         <div id="trendBlock" class="card" style="display:none;"><canvas id="trendChart"></canvas></div>
         <div id="seasonalityBlock" class="card" style="display:none;"><div id="seasonalityContent"></div></div>
         <div id="costBlock" class="card" style="display:none;">
@@ -643,6 +658,7 @@ function showSmartSuggestions(data) {
         { key:'savings', text:'💡 Советы', func:showTips },
         { key:'categories', text:'📊 Категории', func:showCategories },
         { key:'catedit', text:'✏️ Поправить категории', func:showCategoryEditor },
+        { key:'tax', text:'🧾 Налоги', func:showTaxes },
         { key:'pdf', text:'📄 Скачать PDF', func:downloadPdf },
         { key:'trend', text:'📈 Динамика', func:showTrend },
         { key:'seasonality', text:'📅 Сезонность', func:showSeasonality },
@@ -1263,8 +1279,85 @@ function printReport() {
     }, 300);
 }
 
+// ---------- Налоги (оценка по данным выписки) ----------
+const TAX_FIXED_2026 = 57390, TAX_ADD_CAP_2026 = 321818;   // взносы ИП за 2026 год: фиксированные и предел 1%-й части
+const fmtRub = n => Number(n || 0).toLocaleString('ru-RU', { maximumFractionDigits: 0 }) + ' ₽';
+const fmtDate = dt => String(dt.getDate()).padStart(2, '0') + '.' + String(dt.getMonth() + 1).padStart(2, '0') + '.' + dt.getFullYear();
+
+function calcTax(d, mode, rate, ip) {
+    const months = Object.keys(d.months_data || {}).sort();
+    const r = rate / 100;
+    const taxOf = (inc, exp) => (mode === 'usn_dr' ? Math.max(inc - exp, 0) : inc) * r;
+    const res = { total: taxOf(d.income, d.expense), minTax: mode === 'usn_dr' ? d.income * 0.01 : 0, rows: [], contrib: null, annualNpd: null, months: months.length };
+    res.effective = d.income > 0 ? res.total / d.income * 100 : 0;
+    if (mode === 'npd') {
+        res.rows = months.map(m => { const [y, mo] = m.split('-').map(Number); const inc = d.months_data[m].income; return { label: m, income: inc, tax: inc * r, due: new Date(y, mo, 28) }; });
+        if (months.length) res.annualNpd = d.income / months.length * 12;
+    } else {
+        const byQ = {};
+        months.forEach(m => {
+            const [y, mo] = m.split('-').map(Number), q = Math.ceil(mo / 3), k = y + '-' + q;
+            const g = byQ[k] = byQ[k] || { y, q, inc: 0, exp: 0 };
+            g.inc += d.months_data[m].income; g.exp += d.months_data[m].expense;
+        });
+        let year = null, ci = 0, ce = 0, prev = 0;
+        Object.keys(byQ).sort().forEach(k => {
+            const g = byQ[k];
+            if (g.y !== year) { year = g.y; ci = 0; ce = 0; prev = 0; }   // нарастающий итог считается внутри года
+            ci += g.inc; ce += g.exp;
+            const cum = taxOf(ci, ce);
+            res.rows.push({ label: g.y + ', ' + g.q + ' кв.', income: g.inc, tax: Math.max(cum - prev, 0), due: g.q === 4 ? new Date(g.y + 1, 3, 28) : new Date(g.y, g.q * 3, 28) });
+            prev = cum;
+        });
+        if (ip && months.length) {
+            const k = months.length;
+            const annBase = (mode === 'usn_dr' ? Math.max(d.income - d.expense, 0) : d.income) / k * 12;
+            res.contrib = { fixed: TAX_FIXED_2026, add: Math.min(Math.max(annBase - 300000, 0) * 0.01, TAX_ADD_CAP_2026) };
+        }
+    }
+    return res;
+}
+
+function onTaxModeChange() {
+    const mode = document.getElementById('taxMode').value;
+    document.getElementById('taxRate').value = mode === 'usn_dr' ? 15 : 6;
+    document.getElementById('taxIpWrap').style.display = mode === 'npd' ? 'none' : 'flex';
+    renderTax();
+}
+
+function renderTax() {
+    const out = document.getElementById('taxResult');
+    const d = analysisData;
+    if (!d) { out.innerHTML = ''; return; }
+    const mode = document.getElementById('taxMode').value;
+    const rate = parseFloat(document.getElementById('taxRate').value);
+    if (isNaN(rate) || rate < 0 || rate > 100) { out.innerHTML = '<div class="info">Укажите ставку от 0 до 100%.</div>'; return; }
+    const t = calcTax(d, mode, rate, document.getElementById('taxIp').checked);
+    let html = `<div class="result-stats">
+        <div class="stat-card"><div class="value">${fmtRub(t.total)}</div><div class="label">Налог за период выписки (оценка)</div></div>
+        <div class="stat-card"><div class="value">${t.effective.toFixed(1)}%</div><div class="label">Откладывать с каждого поступления</div></div></div>`;
+    if (mode === 'usn_dr' && t.minTax > t.total) html += `<div class="info">Налог по ставке меньше минимального (1% от доходов = ${fmtRub(t.minTax)}). По итогам года платится бо́льшая сумма.</div>`;
+    if (t.rows.length) {
+        html += `<h4 style="margin:1rem 0 0.5rem;">${mode === 'npd' ? 'По месяцам' : 'Авансовые платежи по кварталам'}</h4><div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse;">
+            <tr><th style="text-align:left; padding:6px 8px;">Период</th><th style="padding:6px 8px; text-align:right;">Доход</th><th style="padding:6px 8px; text-align:right;">Налог</th><th style="padding:6px 8px; text-align:left;">Срок уплаты</th></tr>` +
+            t.rows.map(r => `<tr><td style="padding:6px 8px;">${escapeHtml(r.label)}</td><td style="padding:6px 8px; text-align:right;">${fmtRub(r.income)}</td><td style="padding:6px 8px; text-align:right;">${fmtRub(r.tax)}</td><td style="padding:6px 8px;">до ${fmtDate(r.due)}</td></tr>`).join('') + '</table></div>';
+    } else html += '<div class="info">В выписке нет дат, поэтому расписание платежей построить нельзя.</div>';
+    if (t.contrib) html += `<h4 style="margin:1rem 0 0.5rem;">Взносы ИП за себя (оценка за 2026 год)</h4>
+        <div class="info">Фиксированные: <b>${fmtRub(t.contrib.fixed)}</b>, до 28.12.2026.<br>1% с дохода свыше 300 000 ₽ за год (оценка, если сохранится такой же темп): <b>${fmtRub(t.contrib.add)}</b>, до 01.07.2027 (предел ${fmtRub(TAX_ADD_CAP_2026)}).</div>`;
+    if (t.annualNpd && t.annualNpd > 2400000) html += `<div class="alert-warning">В годовом выражении доход около ${fmtRub(t.annualNpd)}: это выше лимита самозанятых (2,4 млн ₽ в год). Проверьте условия НПД.</div>`;
+    html += `<div class="info" style="margin-top:1rem; font-size:0.8rem; line-height:1.5;"><i class="fas fa-triangle-exclamation"></i> <b>Это оценка, а не бухгалтерская или налоговая консультация.</b> Расчёт идёт только по месяцам из загруженной выписки (первый и последний могут быть неполными).
+        ${mode === 'usn_dr' ? 'Расходы взяты из выписки, но налоговыми признаются не все траты. ' : ''}${mode === 'usn_d' ? 'Налог можно уменьшить на уплаченные взносы (ИП без сотрудников до 100%, с сотрудниками до 50%): здесь это не учтено. ' : ''}Региональная ставка может быть ниже: измените её в поле выше. Если срок выпадает на выходной, он переносится на ближайший рабочий день. Порог НДС и лимиты доходов проверяйте отдельно.</div>`;
+    out.innerHTML = html;
+}
+
+function showTaxes() {
+    if (!analysisData) { alert('Сначала загрузите и проанализируйте выписку'); return; }
+    showBlock('taxBlock');
+    renderTax();
+}
+
 function showBlock(id) {
-    const blocks = ['fullReport','forecastBlock','tipsBlock','categoriesBlock','catEditBlock','trendBlock','seasonalityBlock','costBlock','chatBlock','budgetBlock','historyBlock'];
+    const blocks = ['fullReport','forecastBlock','tipsBlock','categoriesBlock','catEditBlock','taxBlock','trendBlock','seasonalityBlock','costBlock','chatBlock','budgetBlock','historyBlock'];
     blocks.forEach(b=>{ const el = document.getElementById(b); if(el) el.style.display = 'none'; });
     document.getElementById(id).style.display = 'block';
     if(window.innerWidth<=768 && mobileMenu) mobileMenu.style.display='none';
