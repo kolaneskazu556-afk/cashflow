@@ -381,6 +381,17 @@
             .cost-result-grid { flex-direction: column; }
             .comparison-grid { grid-template-columns: 1fr; }
         }
+        .policy-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.75); z-index:9999; align-items:flex-start; justify-content:center; padding:20px 12px; overflow-y:auto; }
+        .policy-overlay.open { display:flex; }
+        .policy-box { background:#141414; border:1px solid var(--border-color); border-radius:16px; max-width:760px; width:100%; padding:1.4rem 1.6rem; line-height:1.6; font-size:0.92rem; color:var(--text-primary); }
+        .policy-box h2 { margin:0 0 0.3rem; font-size:1.3rem; }
+        .policy-box h3 { margin:1.2rem 0 0.4rem; font-size:1rem; color:var(--accent); }
+        .policy-box ul { margin:0.3rem 0 0.3rem 1.2rem; padding:0; }
+        .policy-box li { margin:0.25rem 0; }
+        .policy-box a { color:var(--accent); }
+        .policy-box .pm { color:var(--text-secondary); font-size:0.8rem; }
+        .policy-close { float:right; }
+        .link-btn { background:none; border:none; padding:0; color:var(--accent); cursor:pointer; font:inherit; text-decoration:underline; }
     </style>
 </head>
 <body>
@@ -412,7 +423,8 @@
             <div class="info" style="line-height:1.55;">
                 Сам файл выписки не сохраняется. Сервис хранит только итоги анализа (суммы, категории, названия основных источников дохода) и правила категорий, которые вы сами задаёте, под случайным идентификатором в вашем браузере, без регистрации.<br><br>
                 Для определения части категорий, советов и ответов в чате итоговые данные (суммы, категории, иногда названия операций) передаются в GigaChat (Сбер).<br><br>
-                Сервис в тестовом режиме: входа по паролю пока нет, а данные могут быть удалены при обновлении. Если сомневаетесь, начните с примера или уберите из выписки имена.
+                Сервис в тестовом режиме: входа по паролю пока нет, а данные могут быть удалены при обновлении. Если сомневаетесь, начните с примера или уберите из выписки имена.<br><br>
+                <button type="button" class="link-btn" onclick="openPolicy()">Полный текст политики конфиденциальности</button>
             </div>
         </details>
         <div class="info" style="margin-top:0.8rem;"><i class="fas fa-flask"></i> Это ранняя версия: прогнозы ориентировочные, проверено на выписках Альфа-Банка. Нам важно ваше мнение.</div>
@@ -432,6 +444,12 @@
             <input type="checkbox" id="excludeTransfers" checked style="margin-top:3px; accent-color:#f97316; width:18px; height:18px; flex-shrink:0;">
             <span>Не учитывать переводы между людьми и счетами
                 <span style="display:block; font-size:0.75rem; color:var(--text-secondary);">Выключите, если клиенты платят вам переводами на карту: иначе эти поступления не попадут в доход.</span>
+            </span>
+        </label>
+        <label style="display:flex; align-items:flex-start; gap:10px; margin-top:1rem; cursor:pointer; font-size:0.9rem;">
+            <input type="checkbox" id="consentBox" style="margin-top:3px; accent-color:#f97316; width:18px; height:18px; flex-shrink:0;">
+            <span>Я прочитал(а) <button type="button" class="link-btn" onclick="event.preventDefault(); event.stopPropagation(); openPolicy();">политику конфиденциальности</button> и даю согласие на обработку данных из загружаемой выписки, в том числе на передачу их части в GigaChat (Сбер)
+                <span style="display:block; font-size:0.75rem; color:var(--text-secondary);">Не загружайте выписки с данными других людей без их согласия: перед загрузкой лучше убрать или заменить ФИО физических лиц. Пример на вымышленных данных можно запустить без согласия.</span>
             </span>
         </label>
         <div style="display: flex; gap: 10px; margin-top: 1rem;">
@@ -509,6 +527,54 @@
     </div>
 </div>
 
+<div style="text-align:center; font-size:0.78rem; color:var(--text-secondary); margin:1.5rem 0 2rem;">
+    CashFlow, тестовая версия · <button type="button" class="link-btn" onclick="openPolicy()">Политика конфиденциальности</button> · <a href="mailto:kolaneskazu556@gmail.com" style="color:var(--accent);">Связаться</a>
+</div>
+
+<div class="policy-overlay" id="policyOverlay" onclick="if(event.target===this) closePolicy()">
+  <div class="policy-box" role="dialog" aria-modal="true" aria-labelledby="policyTitle">
+    <button type="button" class="suggestion-btn policy-close" onclick="closePolicy()">✕ Закрыть</button>
+    <h2 id="policyTitle">Политика конфиденциальности</h2>
+    <div class="pm">Сервис CashFlow (КэшФлоу). Редакция от 28.10.2026. Сервис работает в тестовом режиме.</div>
+
+    <h3>1. Кто обрабатывает данные</h3>
+    <p>Оператор персональных данных: Захаров Николай Андреевич (физическое лицо). Связь по любым вопросам о данных: <a href="mailto:kolaneskazu556@gmail.com">kolaneskazu556@gmail.com</a>.</p>
+
+    <h3>2. Какие данные и зачем</h3>
+    <p>Сервис анализирует банковскую выписку, которую вы загружаете сами, чтобы показать доходы, расходы, прибыль, категории, прогноз, налоги и ответить на ваши вопросы в чате. Данные не используются для рекламы и не продаются.</p>
+    <ul>
+      <li><b>Файл выписки</b> обрабатывается на сервере и как файл не сохраняется.</li>
+      <li><b>Сохраняются итоги анализа:</b> суммы, категории, помесячная динамика, названия основных источников дохода и клиентов (это могут быть названия организаций и ФИО физических лиц из выписки), а также настройки, которые вы задаёте: лимиты бюджета и правила категорий.</li>
+      <li><b>Вопросы в чате</b> и счётчик количества вопросов за сутки.</li>
+      <li><b>Случайный идентификатор</b> в памяти вашего браузера (localStorage). Он нужен, чтобы показывать вам ваши же данные; это не вход по паролю. Других cookie и счётчиков в сервисе нет.</li>
+      <li><b>Технические данные</b> (например, IP-адрес и время запроса) могут фиксироваться хостинг-провайдером.</li>
+    </ul>
+
+    <h3>3. Кому данные передаются</h3>
+    <ul>
+      <li><b>GigaChat (ПАО Сбербанк).</b> Для определения части категорий, советов и ответов в чате в GigaChat передаются итоговые данные: суммы, категории, иногда названия операций, а также ваши вопросы. Это происходит на условиях сервиса GigaChat.</li>
+      <li><b>Хостинг (Render).</b> Сервис размещён у стороннего провайдера, серверы которого могут находиться за пределами России. Загружая выписку, вы соглашаетесь на такую передачу данных. Если вас это не устраивает, не загружайте свои данные, а используйте пример на вымышленных данных.</li>
+    </ul>
+    <p>Других получателей нет. Данные не передаются рекламным и аналитическим сервисам.</p>
+
+    <h3>4. Данные третьих лиц</h3>
+    <p>В выписках встречаются имена контрагентов и физических лиц. Загружайте только ту выписку, которой вы вправе распоряжаться. По возможности убирайте или заменяйте ФИО физических лиц до загрузки: для анализа они обычно не нужны.</p>
+
+    <h3>5. Как защищены данные</h3>
+    <p>Честно о текущем состоянии: соединение с сайтом защищено HTTPS, данные разных пользователей разделены случайными идентификаторами, а файл выписки не хранится. Но это тестовая версия: входа по логину и паролю пока нет, поэтому любой, кто знает ваш идентификатор, может увидеть ваши данные. Идентификатор длинный и случайный, но это не банковский уровень защиты. Абсолютной гарантии от утечек не может дать ни один сервис, поэтому не загружайте то, что не готовы доверить тестовому сервису.</p>
+
+    <h3>6. Сроки хранения</h3>
+    <p>Итоги анализа хранятся, пока вы или оператор их не удалите. Из-за особенностей бесплатного хостинга данные также могут быть удалены при обновлении или перезапуске сервиса.</p>
+
+    <h3>7. Ваши права</h3>
+    <p>Вы можете отозвать согласие, запросить сведения о ваших данных, их исправление или удаление. Напишите на <a href="mailto:kolaneskazu556@gmail.com">kolaneskazu556@gmail.com</a> и укажите свой идентификатор, чтобы данные можно было найти. Ответим в сроки, установленные законом.</p>
+    <p class="pm">Ваш идентификатор: <span id="policyUserId" style="user-select:all;"></span></p>
+
+    <h3>8. Изменения</h3>
+    <p>Политика может обновляться по мере развития сервиса; актуальная версия всегда доступна по ссылке внизу страницы.</p>
+  </div>
+</div>
+
 <script>
 // Ссылка на форму отзыва (например, Яндекс Формы). Пока пусто: кнопки скрыты.
 const FEEDBACK_URL = '';
@@ -549,9 +615,21 @@ function handleFileSelect() {
         selectedFile = fileInput.files[0]; 
         fileNameDiv.textContent = "Выбран файл: "+selectedFile.name; 
         fileNameDiv.style.display = "block"; 
-        analyzeBtn.disabled = false; 
+        refreshAnalyzeState(); 
     } 
 }
+function refreshAnalyzeState() {
+    const consent = document.getElementById('consentBox');
+    analyzeBtn.disabled = !(selectedFile && consent && consent.checked);
+}
+document.getElementById('consentBox').addEventListener('change', refreshAnalyzeState);
+function openPolicy() {
+    document.getElementById('policyUserId').textContent = userId;
+    document.getElementById('policyOverlay').classList.add('open');
+}
+function closePolicy() { document.getElementById('policyOverlay').classList.remove('open'); }
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePolicy(); });
+if (location.hash === '#privacy') openPolicy();
 fileInput.onchange = handleFileSelect;
 
 const dropZone = document.querySelector('.upload-area');
@@ -568,6 +646,11 @@ dropZone.ondrop = (e) => {
 
 async function uploadFile(isRecalc) {
     if(!selectedFile) return;
+    // демо на вымышленных данных не требует согласия, свои файлы: только с галочкой
+    if (selectedFile.name !== DEMO_FILENAME && !document.getElementById('consentBox').checked) {
+        alert('Поставьте галочку согласия с политикой конфиденциальности.');
+        return;
+    }
     
     const formData = new FormData();
     formData.append('file', selectedFile);
